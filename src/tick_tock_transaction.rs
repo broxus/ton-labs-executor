@@ -11,26 +11,29 @@
 * limitations under the License.
 */
 
-use crate::{blockchain_config::BlockchainConfig, ExecuteParams, TransactionExecutor, error::ExecutorError, ActionPhaseResult};
-
 use std::sync::atomic::Ordering;
-use ton_block::{
-    Account, CurrencyCollection, Grams, Message, TrComputePhase, Transaction,
-    TransactionDescr, TransactionDescrTickTock, TransactionTickTock, Serializable
-};
-use ton_types::{fail, Result, HashmapType, SliceData};
-use ton_vm::{
+
+use everscale_types::cell::Cell;
+use everscale_types::models::{Account, AccountState, ComputePhase, ComputePhaseSkipReason, CurrencyCollection, Lazy, OptionalAccount, SkippedComputePhase, StateInit, TickTock, TickTockTxInfo, Transaction, TxInfo};
+use everscale_types::num::{Tokens, Uint15};
+use everscale_types::prelude::CellFamily;
+use everscale_vm::{
     boolean, int,
-    stack::{integer::IntegerData, Stack, StackItem}, SmartContractInfo,
+    SmartContractInfo, stack::{integer::IntegerData, Stack, StackItem},
 };
+use everscale_vm::{error, fail, OwnedCellSlice, types::Result};
+
+use crate::{ActionPhaseResult, error::ExecutorError, ExecuteParams, InputMessage, TransactionExecutor};
+use crate::blockchain_config::PreloadedBlockchainConfig;
+use crate::utils::{create_tx, store, TxTime};
 
 pub struct TickTockTransactionExecutor {
-    pub config: BlockchainConfig,
-    pub tt: TransactionTickTock,
+    pub config: PreloadedBlockchainConfig,
+    pub tt: TickTock,
 }
 
 impl TickTockTransactionExecutor {
-    pub fn new(config: BlockchainConfig, tt: TransactionTickTock) -> Self {
+    pub fn new(config: PreloadedBlockchainConfig, tt: TickTock) -> Self {
         Self {
             config,
             tt,
@@ -43,53 +46,54 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     /// Create end execute tick or tock transaction for special account
     fn execute_with_params(
         &self,
-        in_msg: Option<&Message>,
-        account: &mut Account,
-        params: ExecuteParams,
+        in_msg: Option<&InputMessage>,
+        account: &mut OptionalAccount,
+        params: &ExecuteParams,
     ) -> Result<Transaction> {
         if in_msg.is_some() {
             fail!("Tick Tock transaction must not have input message")
         }
-        let account_id = match account.get_id() {
-            Some(addr) => addr,
-            None => fail!("Tick Tock contract should have Standard address")
+        let (account_address, account_id, mut acc_balance, due_before_storage) = match &account.0 {
+            Some(account) => {
+                let Some(account_id) = account.address.as_std() else {
+                    fail!("Tick Tock contract should have Standard address")
+                };
+                match account.state {
+                    AccountState::Active(StateInit { special: Some(tt), .. }) =>
+                        if tt.tock != (self.tt == TickTock::Tock) && tt.tick != (self.tt == TickTock::Tick) {
+                            fail!("wrong type of account's tick tock flag")
+                        }
+                    _ => fail!("Account {} is not special account for tick tock", account_id)
+                }
+                log::debug!(target: "executor", "tick tock transaction account {}", account_id);
+                let due_before_storage = account.storage_stat.due_payment.map_or(0, |due| due.into_inner());
+                (account.address.clone(), account_id.address, account.balance.clone(), due_before_storage)
+            },
+            None => fail!("Tick Tock transaction requires deployed account")
         };
-        match account.get_tick_tock() {
-            Some(tt) => if tt.tock != self.tt.is_tock() && tt.tick != self.tt.is_tick() {
-                fail!("wrong type of account's tick tock flag")
-            }
-            None => fail!("Account {:x} is not special account for tick tock", account_id)
-        }
-        let account_address = account.get_addr().cloned().unwrap_or_default();
-        log::debug!(target: "executor", "tick tock transation account {:x}", account_id);
-        let mut acc_balance = account.balance().cloned().unwrap_or_default();
 
         let is_masterchain = true;
         let is_special = true;
-        let lt = std::cmp::max(
-            account.last_tr_time().unwrap_or_default(),
-            params.last_tr_lt.load(Ordering::Relaxed)
-        );
-        let mut tr = Transaction::with_address_and_status(account_id.clone(), account.status());
-        tr.set_logical_time(lt);
-        tr.set_now(params.block_unixtime);
-        account.set_last_paid(0);
-        let due_before_storage = account.due_payment().map_or(0, |due| due.as_u128());
-        let (storage, storage_fee) = match self.storage_phase(
+        let time = TxTime::new(&params, account, None);
+        let mut tr = create_tx(account_id, account.status(), &time, None);
+
+        account.0.as_mut().map(|a| a.storage_stat.last_paid = 0);
+        let (storage_phase, storage_fee) = match self.storage_phase(
             account,
             &mut acc_balance,
-            &mut tr,
+            &mut tr.total_fees,
+            time.now(),
             is_masterchain,
             is_special,
         ) {
             Ok(storage_ph) => {
-                let mut storage_fee = storage_ph.storage_fees_collected.as_u128();
+                let mut storage_fee = storage_ph.storage_fees_collected.into_inner();
                 if let Some(due) = &storage_ph.storage_fees_due {
-                    storage_fee += due.as_u128()
+                    storage_fee += due.into_inner()
                 }
                 storage_fee -= due_before_storage;
                 (storage_ph, storage_fee)
-            },
+            }
             Err(e) => fail!(
                 ExecutorError::TrExecutorError(
                     format!(
@@ -99,36 +103,38 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 )
             )
         };
-        let mut description = TransactionDescrTickTock {
-            tt: self.tt.clone(),
-            storage,
-            ..TransactionDescrTickTock::default()
+        let mut description = TickTockTxInfo {
+            kind: self.tt.clone(),
+            storage_phase,
+            compute_phase: ComputePhase::Skipped(SkippedComputePhase { reason: ComputePhaseSkipReason::NoState }),
+            action_phase: None,
+            aborted: false,
+            destroyed: false,
         };
 
         let old_account = account.clone();
         let original_acc_balance = acc_balance.clone();
 
-        let config_params = self.config().raw_config().config_params.data().cloned();
         let mut smc_info = SmartContractInfo {
-            capabilities: self.config().raw_config().capabilities(),
-            myself: SliceData::load_builder(account_address.write_to_new_cell().unwrap_or_default()).unwrap(),
+            capabilities: self.config().global_version().capabilities,
+            myself: OwnedCellSlice::new(store(&account_address)?)?,
             block_lt: params.block_lt,
-            trans_lt: lt,
+            trans_lt: time.tx_lt(),
             unix_time: params.block_unixtime,
             seq_no: params.seq_no,
             balance: acc_balance.clone(),
-            config_params,
+            config_params: self.config().raw_config().params.root().clone(),
             ..Default::default()
         };
-        smc_info.calc_rand_seed(params.seed_block, &account_address.address().get_bytestring(0));
+        smc_info.calc_rand_seed(params.seed_block, account_id.as_slice());
         let mut stack = Stack::new();
         stack
-            .push(int!(account.balance().map_or(0, |value| value.grams.as_u128())))
-            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(account_id.get_bytestring(0))))
-            .push(boolean!(self.tt.is_tock()))
+            .push(int!(acc_balance.tokens.into_inner()))
+            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.0)))
+            .push(boolean!(self.tt == TickTock::Tock))
             .push(int!(-2));
-        log::debug!(target: "executor", "compute_phase {}", lt);
-        let (compute_ph, actions, new_data) = match self.compute_phase(
+        log::debug!(target: "executor", "compute_phase {}", time.tx_lt());
+        let (compute_phase, actions, new_data) = match self.compute_phase(
             None,
             account,
             &mut acc_balance,
@@ -150,26 +156,27 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             }
         };
         let mut out_msgs = vec![];
-        description.compute_ph = compute_ph;
-        description.action = match description.compute_ph {
-            TrComputePhase::Vm(ref phase) => {
-                tr.add_fee_grams(&phase.gas_fees)?;
+        description.compute_phase = compute_phase;
+        description.action_phase = match description.compute_phase {
+            ComputePhase::Executed(ref phase) => {
+                tr.total_fees.tokens = tr.total_fees.tokens
+                    .checked_add(phase.gas_fees).ok_or_else(|| error!("integer overflow"))?;
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
-                    log::debug!(target: "executor", "action_phase {}", lt);
+                    log::debug!(target: "executor", "action_phase {}", time.tx_lt());
                     match self.action_phase_with_copyleft(
-                        &mut tr,
+                        &mut tr.total_fees.tokens,
+                        &time,
                         account,
                         &original_acc_balance,
                         &mut acc_balance,
                         &mut CurrencyCollection::default(),
-                        &Grams::zero(),
-                        actions.unwrap_or_default(),
-                        new_data,
+                        &Tokens::ZERO,
+                        actions.unwrap_or(Cell::empty_cell()),
                         &account_address,
-                        is_special
+                        is_special,
                     ) {
-                        Ok(ActionPhaseResult{phase, messages, .. }) => {
+                        Ok(ActionPhaseResult { phase, messages, .. }) => {
                             out_msgs = messages;
                             // ignore copyleft reward because account is special
                             Some(phase)
@@ -188,14 +195,21 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                     None
                 }
             }
-            TrComputePhase::Skipped(ref skipped) => {
+            ComputePhase::Skipped(ref skipped) => {
                 log::debug!(target: "executor",
                     "compute_phase: skipped: reason {:?}", skipped.reason);
                 None
             }
         };
+        if description.action_phase.as_ref().map_or(false, |a| a.success) {
+            if let Some(new_data) = new_data {
+                if let Some(Account { state: AccountState::Active(ref mut state), .. }) = account.0 {
+                    state.data = Some(new_data)
+                }
+            }
+        }
 
-        description.aborted = match description.action {
+        description.aborted = match description.action_phase {
             Some(ref phase) => {
                 log::debug!(target: "executor",
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code);
@@ -208,28 +222,34 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         };
 
         log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
-        tr.set_end_status(account.status());
-        account.set_balance(acc_balance);
+        tr.end_status = account.status();
+        account.0.as_mut().map(|a| a.balance = acc_balance);
         if description.aborted {
             *account = old_account;
         }
-        params.last_tr_lt.store(lt, Ordering::Relaxed);
-        let lt = self.add_messages(&mut tr, out_msgs, params.last_tr_lt)?;
-        account.set_last_tr_time(lt);
-        tr.write_description(&TransactionDescr::TickTock(description))?;
+        params.last_tr_lt.store(time.tx_lt(), Ordering::Relaxed);
+        account.0.as_mut().map(|a| a.last_trans_lt = time.non_aborted_account_lt(out_msgs.len()));
+        tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
+        for (msg_index, msg) in out_msgs.into_iter().enumerate() {
+            tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
+        }
+        tr.info = Lazy::new(&TxInfo::TickTock(description))?;
         Ok(tr)
     }
     fn ordinary_transaction(&self) -> bool { false }
-    fn config(&self) -> &BlockchainConfig { &self.config }
-    fn build_stack(&self, _in_msg: Option<&Message>, account: &Account) -> Stack {
-        let account_balance = account.balance().unwrap().grams.as_u128();
-        let account_id = account.get_id().unwrap();
+    fn config(&self) -> &PreloadedBlockchainConfig { &self.config }
+
+    fn build_stack(&self, _in_msg: Option<&InputMessage>, account: &OptionalAccount) -> Result<Stack> {
+        let account = account.0.as_ref().ok_or_else(|| error!("Tick Tock transaction requires deployed account"))?;
+        let account_balance = account.balance.tokens.into_inner();
+        let account_id = account.address.as_std().map(|a| a.address)
+            .ok_or_else(|| error!("Tick Tock transaction requires Std address"))?;
         let mut stack = Stack::new();
         stack
             .push(int!(account_balance))
-            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(account_id.get_bytestring(0))))
-            .push(boolean!(self.tt.is_tock()))
+            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&account_id.0)))
+            .push(boolean!(self.tt == TickTock::Tock))
             .push(int!(-2));
-        stack
+        Ok(stack)
     }
 }

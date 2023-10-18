@@ -11,9 +11,9 @@
 * limitations under the License.
 */
 
-use ton_types::types::ExceptionCode;
-use ton_block::ComputeSkipReason;
-use ton_vm::stack::StackItem;
+use everscale_types::models::ComputePhaseSkipReason;
+use everscale_vm::types::ExceptionCode;
+use everscale_vm::stack::StackItem;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ExecutorError {   
@@ -27,6 +27,6 @@ pub enum ExecutorError {
     NoAcceptError(i32, Option<StackItem>),
     #[error("Cannot pay for importing this external message")]
     NoFundsToImportMsg,
-    #[error("Compute phase skipped while processing exteranl inbound messagewith reason {0:?}")]
-    ExtMsgComputeSkipped(ComputeSkipReason)
+    #[error("Compute phase skipped while processing external inbound message with reason {0:?}")]
+    ExtMsgComputeSkipped(ComputePhaseSkipReason)
 }

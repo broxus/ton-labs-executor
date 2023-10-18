@@ -11,16 +11,16 @@
 * limitations under the License.
 */
 
-use ton_block::GlobalCapabilities;
-use ton_types::{Cell, HashmapE, SliceData, Result};
-use ton_vm::{
+use everscale_types::models::{GlobalCapabilities, LibDescr, SimpleLib};
+use everscale_types::prelude::{Cell, HashBytes, Dict};
+use everscale_vm::{
     executor::{Engine, BehaviorModifiers, gas::gas_state::Gas}, smart_contract_info::SmartContractInfo,
     stack::{Stack, StackItem, savelist::SaveList}
 };
-use crate::BlockchainConfig;
+use everscale_vm::{OwnedCellSlice, types::Result};
 
 pub struct VMSetupContext {
-    pub capabilities: u64,
+    pub capabilities: GlobalCapabilities,
     pub block_version: u32,
     pub signature_id: i32,
 }
@@ -29,11 +29,10 @@ pub struct VMSetupContext {
 /// stack and code of VM engine. Returns initialized instance of TVM.
 pub struct VMSetup {
     vm: Engine,
-    code: SliceData,
+    code: OwnedCellSlice,
     ctrls: SaveList,
     stack: Option<Stack>,
-    gas: Option<Gas>,
-    libraries: Vec<HashmapE>,
+    gas: Gas,
     ctx: VMSetupContext,
 }
 
@@ -41,14 +40,13 @@ impl VMSetup {
 
     /// Creates new instance of VMSetup with contract code.
     /// Initializes some registers of TVM with predefined values.
-    pub fn with_context(code: SliceData, ctx: VMSetupContext) -> Self {
+    pub fn with_context(code: OwnedCellSlice, gas: Gas, ctx: VMSetupContext) -> Self {
         VMSetup {
             vm: Engine::with_capabilities(ctx.capabilities),
             code,
             ctrls: SaveList::new(),
             stack: None,
-            gas: Some(Gas::empty()),
-            libraries: vec![],
+            gas,
             ctx,
         }
     }
@@ -59,15 +57,15 @@ impl VMSetup {
         self.ctrls.put(7, &mut sci)?;
         Ok(self)
     }
-
+/*
     /// Sets SmartContractInfo for TVM register c7
     #[deprecated]
     pub fn set_contract_info_with_config(
         self,
         mut sci: SmartContractInfo,
-        config: &BlockchainConfig
+        config: &PreloadedBlockchainConfig
     ) -> Result<VMSetup> {
-        sci.capabilities |= config.raw_config().capabilities();
+        sci.capabilities |= config.global_version().capabilities.into_inner();
         self.set_smart_contract_info(sci)
     }
 
@@ -79,11 +77,11 @@ impl VMSetup {
         with_init_code_hash: bool
     ) -> Result<VMSetup> {
         if with_init_code_hash {
-            sci.capabilities |= GlobalCapabilities::CapInitCodeHash as u64;
+            sci.capabilities |= GlobalCapability::CapInitCodeHash;
         }
         self.set_smart_contract_info(sci)
     }
-
+*/
     /// Sets persistent data for contract in register c4
     pub fn set_data(mut self, data: Cell) -> Result<VMSetup> {
         self.ctrls.put(4, &mut StackItem::Cell(data))?;
@@ -96,16 +94,14 @@ impl VMSetup {
         self
     }
 
-    /// Sets gas for TVM
-    pub fn set_gas(mut self, gas: Gas) -> VMSetup {
-        self.gas = Some(gas);
-        self
-    }
-
     /// Sets libraries for TVM
-    pub fn set_libraries(mut self, libraries: Vec<HashmapE>) -> VMSetup {
-        self.libraries = libraries;
-        self
+    pub fn set_libraries(
+        mut self,
+        account_libs: &Dict<HashBytes, SimpleLib>,
+        shared_libs: &Dict<HashBytes, LibDescr>
+    ) -> Result<VMSetup> {
+        self.vm.set_libraries(account_libs, shared_libs)?;
+        Ok(self)
     }
 
     /// Sets trace flag to TVM for printing stack and commands
@@ -119,13 +115,15 @@ impl VMSetup {
     }
 
     /// Disables signature check
-    pub fn modify_behavior(mut self, modifiers: BehaviorModifiers) -> VMSetup {
-        self.vm.modify_behavior(modifiers);
+    pub fn modify_behavior(mut self, modifiers: Option<&BehaviorModifiers>) -> VMSetup {
+        if let Some(modifiers) = modifiers {
+            self.vm.modify_behavior(modifiers);
+        }
         self
     }
 
     /// Creates new instance of TVM with defined stack, registers and code.
-    pub fn create(self) -> Engine {
+    pub fn create(self) -> Result<Engine> {
         if cfg!(debug_assertions) {
             // account balance is duplicated in stack and in c7 - so check
             let balance_in_smc = self
@@ -150,15 +148,14 @@ impl VMSetup {
                 .unwrap();
             assert_eq!(balance_in_smc, balance_in_stack);
         }
-        let mut vm = self.vm.setup_with_libraries(
+        let mut vm = self.vm.setup(
             self.code,
             Some(self.ctrls),
             self.stack,
             self.gas,
-            self.libraries
-        );
+        )?;
         vm.set_block_version(self.ctx.block_version);
         vm.set_signature_id(self.ctx.signature_id);
-        vm
+        Ok(vm)
     }
 }

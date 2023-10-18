@@ -11,14 +11,28 @@
 * limitations under the License.
 */
 
-use ton_block::{
-    ConfigParam18, ConfigParams, FundamentalSmcAddresses, GasLimitsPrices, GlobalCapabilities, Grams,
-    MsgAddressInt, MsgForwardPrices, StorageInfo, StoragePrices, StorageUsedShort,
-};
-use ton_types::{Cell, Result, UInt256};
+
+use ahash::{HashMap, HashSet};
+use everscale_types::cell::{CellTreeStats, HashBytes};
+use everscale_types::dict::DictKey;
+use everscale_types::models::{BlockchainConfig, GasLimitsPrices, GlobalCapabilities, GlobalCapability, GlobalVersion, IntAddr, MsgForwardPrices, StorageInfo, StoragePrices, WorkchainDescription, WorkchainFormat, WorkchainFormatBasic};
+use everscale_types::num::Tokens;
+use everscale_types::prelude::{Cell, CellBuilder, CellFamily, Dict, Store};
+use everscale_vm::fail;
+use everscale_vm::types::Result;
+
+use crate::ext::gas_limit_prices::GasLimitsPricesExt;
 
 pub const VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES: u32 = 8;
 pub const VERSION_BLOCK_NEW_CALCULATION_BOUNCED_STORAGE: u32 = 30;
+
+pub const MAX_ACTIONS: u16 = 255;
+
+pub const MAX_MSG_BITS: usize = 1 << 21;
+
+pub const MAX_MSG_CELLS: usize = 1 << 13;
+/// Limited only by storage stats data type. Account size should be regulated by storage fee.
+pub const MAX_ACCOUNT_CELLS: usize = 1 << 45;
 
 pub(crate) trait TONDefaultConfig {
     /// Get default value for masterchain
@@ -35,7 +49,7 @@ impl TONDefaultConfig for MsgForwardPrices {
             cell_price: 65536000000,
             ihr_price_factor: 98304,
             first_frac: 21845,
-            next_frac: 21845
+            next_frac: 21845,
         }
     }
 
@@ -46,16 +60,16 @@ impl TONDefaultConfig for MsgForwardPrices {
             cell_price: 6553600000,
             ihr_price_factor: 98304,
             first_frac: 21845,
-            next_frac: 21845
+            next_frac: 21845,
         }
     }
 }
 
 pub trait CalcMsgFwdFees {
-    fn fwd_fee(&self, msg_cell: &Cell) -> u128;
-    fn ihr_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
-    fn mine_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
-    fn next_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams>;
+    fn fwd_fee(&self, msg_cell: &CellTreeStats) -> u128;
+    fn ihr_fee(&self, fwd_fee: &Tokens) -> Option<Tokens>;
+    fn mine_fee(&self, fwd_fee: &Tokens) -> Option<Tokens>;
+    fn next_fee(&self, fwd_fee: &Tokens) -> Option<Tokens>;
 }
 
 impl CalcMsgFwdFees for MsgForwardPrices {
@@ -63,26 +77,22 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// Forward fee is calculated according to the following formula:
     /// `fwd_fee = (lump_price + ceil((bit_price * msg.bits + cell_price * msg.cells)/2^16))`.
     /// `msg.bits` and `msg.cells` are calculated from message represented as tree of cells. Root cell is not counted.
-    fn fwd_fee(&self, msg_cell: &Cell) -> u128 {
-        let mut storage = StorageUsedShort::default();
-        storage.append(msg_cell);
-        let mut bits = storage.bits() as u128;
-        let mut cells = storage.cells() as u128;
-        bits -= msg_cell.bit_length() as u128;
-        cells -= 1;
+    fn fwd_fee(&self, msg_stats_no_root: &CellTreeStats) -> u128 {
+        let bits = msg_stats_no_root.bit_count as u128;
+        let cells = msg_stats_no_root.cell_count as u128;
 
         // All prices except `lump_price` are presented in `0xffff * price` form.
         // It is needed because `ihr_factor`, `first_frac` and `next_frac` are not integer values
         // but calculations are performed in integers, so prices are multiplied to some big
         // number (0xffff) and fee calculation uses such values. At the end result is divided by
-        // 0xffff with ceil rounding to obtain nanograms (add 0xffff and then `>> 16`)
+        // 0xffff with ceil rounding to obtain nanoTokens (add 0xffff and then `>> 16`)
         self.lump_price as u128 + ((cells * self.cell_price as u128 + bits * self.bit_price as u128 + 0xffff) >> 16)
     }
 
     /// Calculate message IHR fee
     /// IHR fee is calculated as `(msg_forward_fee * ihr_factor) >> 16`
-    fn ihr_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams> {
-        Grams::new((fwd_fee.as_u128() * self.ihr_price_factor as u128) >> 16)
+    fn ihr_fee(&self, fwd_fee: &Tokens) -> Option<Tokens> {
+        Tokens::try_from((fwd_fee.into_inner() * self.ihr_price_factor as u128) >> 16).ok()
     }
 
     /// Calculate mine part of forward fee
@@ -91,17 +101,17 @@ impl CalcMsgFwdFees for MsgForwardPrices {
     /// `int_msg_mine_fee` is a part of transaction `total_fees` and will go validators of account's shard
     /// `int_msg_remain_fee` is placed in header of internal message and will go to validators
     /// of shard to which message destination address is belong.
-    fn mine_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams> {
-        Grams::new((fwd_fee.as_u128() * self.first_frac as u128) >> 16)
+    fn mine_fee(&self, fwd_fee: &Tokens) -> Option<Tokens> {
+        Tokens::try_from((fwd_fee.into_inner() * self.first_frac as u128) >> 16).ok()
     }
-    fn next_fee_checked(&self, fwd_fee: &Grams) -> Result<Grams> {
-        Grams::new((fwd_fee.as_u128() * self.next_frac as u128) >> 16)
+    fn next_fee(&self, fwd_fee: &Tokens) -> Option<Tokens> {
+        Tokens::try_from((fwd_fee.into_inner() * self.next_frac as u128) >> 16).ok()
     }
 }
 
 #[derive(Clone)]
 pub struct AccStoragePrices {
-    prices: Vec<StoragePrices>
+    prices: Vec<StoragePrices>,
 }
 
 impl Default for AccStoragePrices {
@@ -122,15 +132,15 @@ impl Default for AccStoragePrices {
 
 impl AccStoragePrices {
     /// Calculate storage fee for provided data
-    pub fn calc_storage_fee(&self, cells: u128, bits: u128, mut last_paid: u32, now: u32, is_masterchain: bool) -> u128 {
+    pub fn calc_storage_fee(&self, cells: u64, bits: u64, mut last_paid: u32, now: u32, is_masterchain: bool) -> u128 {
         if now <= last_paid || last_paid == 0 || self.prices.is_empty() || now <= self.prices[0].utime_since {
-            return 0
+            return 0;
         }
         let mut fee = 0u128;
         // storage prices config contains prices array for some time intervals
         // to calculate account storage fee we need to sum fees for all intervals since last
         // storage fee pay calculated by formula `(cells * cell_price + bits * bits_price) * interval`
-        for i in 0 .. self.prices.len() {
+        for i in 0..self.prices.len() {
             let prices = &self.prices[i];
             let end = if i < self.prices.len() - 1 {
                 self.prices[i + 1].utime_since
@@ -141,9 +151,9 @@ impl AccStoragePrices {
             if end >= last_paid {
                 let delta = end - std::cmp::max(prices.utime_since, last_paid);
                 fee += if is_masterchain {
-                    (cells * prices.mc_cell_price_ps as u128 + bits * prices.mc_bit_price_ps as u128) * delta as u128
+                    (cells as u128 * prices.mc_cell_price_ps as u128 + bits as u128 * prices.mc_bit_price_ps as u128) * delta as u128
                 } else {
-                    (cells * prices.cell_price_ps as u128 + bits * prices.bit_price_ps as u128) * delta as u128
+                    (cells as u128 * prices.cell_price_ps as u128 + bits as u128 * prices.bit_price_ps as u128) * delta as u128
                 };
                 last_paid = end;
             }
@@ -154,12 +164,16 @@ impl AccStoragePrices {
         (fee + 0xffff) >> 16
     }
 
-    pub fn with_config(config: &ConfigParam18) -> Result<Self> {
+    pub fn with_config(config18: Dict<u32, StoragePrices>) -> Result<Self> {
         let mut prices = vec![];
-        for i in 0..config.len()? {
-            prices.push(config.get(i as u32)?);
+        for (i, kv) in config18.iter().enumerate() {
+            let (k, v) = kv?;
+            if i as u32 != k {
+                fail!(format!("config18 is sparse: got key {k} for element {i}"));
+            }
+            prices.push(v);
         }
-
+        prices.shrink_to_fit();
         Ok(AccStoragePrices { prices })
     }
 }
@@ -175,8 +189,7 @@ impl TONDefaultConfig for GasLimitsPrices {
             gas_credit: 10000,
             block_gas_limit: 10000000,
             freeze_due_limit: 100000000,
-            delete_due_limit:1000000000,
-            max_gas_threshold:10000000000,
+            delete_due_limit: 1000000000,
         }
     }
 
@@ -190,96 +203,124 @@ impl TONDefaultConfig for GasLimitsPrices {
             gas_credit: 10000,
             block_gas_limit: 10000000,
             freeze_due_limit: 100000000,
-            delete_due_limit:1000000000,
-            max_gas_threshold:1000000000,
+            delete_due_limit: 1000000000,
         }
     }
 }
 
 /// Blockchain configuration parameters
 #[derive(Clone)]
-pub struct BlockchainConfig {
+pub struct PreloadedBlockchainConfig {
     gas_prices_mc: GasLimitsPrices,
     gas_prices_wc: GasLimitsPrices,
     fwd_prices_mc: MsgForwardPrices,
     fwd_prices_wc: MsgForwardPrices,
     storage_prices: AccStoragePrices,
-    special_contracts: FundamentalSmcAddresses,
-    capabilities: u64,
-    global_version: u32,
+    special_contracts: HashSet<HashBytes>,
+    workchains: HashMap<i32, WorkchainDescription>,
+    global_version: GlobalVersion,
     global_id: i32,
-    raw_config: ConfigParams,
+    raw_config: BlockchainConfig,
 }
 
-impl Default for BlockchainConfig {
+impl Default for PreloadedBlockchainConfig {
     fn default() -> Self {
-        BlockchainConfig {
+        Self {
             gas_prices_mc: GasLimitsPrices::default_mc(),
             gas_prices_wc: GasLimitsPrices::default_wc(),
             fwd_prices_mc: MsgForwardPrices::default_mc(),
             fwd_prices_wc: MsgForwardPrices::default_wc(),
             storage_prices: AccStoragePrices::default(),
-            special_contracts: Self::get_default_special_contracts(),
-            raw_config: Self::get_defult_raw_config(),
-            global_version: 0,
+            special_contracts: Self::default_special_contracts().keys()
+                .collect::<std::result::Result<_, _>>().expect("shouldn't fail"),
+            workchains: Self::default_workchains().iter()
+                .collect::<std::result::Result<_, _>>().expect("shouldn't fail"),
+            raw_config: Self::default_raw_config(),
+            global_version: Self::default_global_version(),
             global_id: 42,
-            capabilities: 0x52e,
         }
     }
 }
 
-impl BlockchainConfig {
+impl PreloadedBlockchainConfig {
 
-    fn get_default_special_contracts() -> FundamentalSmcAddresses {
-        let mut map = FundamentalSmcAddresses::default();
-        map.add_key(&UInt256::with_array([0x33u8; 32])).unwrap();
-        map.add_key(&UInt256::with_array([0x66u8; 32])).unwrap();
-        map.add_key(&
-            "34517C7BDF5187C55AF4F8B61FDC321588C7AB768DEE24B006DF29106458D7CF".parse::<UInt256>().unwrap()
-        ).unwrap();
-        map
+    fn default_special_contracts() -> Dict<HashBytes, ()> {
+        let mut fundamental_contracts = Dict::<HashBytes, ()>::new();
+        for special_contract in vec![
+            HashBytes::from([0x33u8; 32]),
+            HashBytes::from([0x66u8; 32]),
+            "34517C7BDF5187C55AF4F8B61FDC321588C7AB768DEE24B006DF29106458D7CF".parse::<HashBytes>().unwrap(),
+        ] {
+            fundamental_contracts.add(special_contract, ()).expect("Shouldn't fail");
+        }
+        fundamental_contracts
     }
 
-    fn get_defult_raw_config() -> ConfigParams {
-        let mut params = ConfigParams {
-            config_addr: [0x55; 32].into(),
-            ..ConfigParams::default()
-        };
+    fn default_global_version() -> GlobalVersion {
+        GlobalVersion {
+            version: 0,
+            capabilities: GlobalCapabilities::new(0x52e),
+        }
+    }
 
-        params
-            .set_config(
-                ton_block::ConfigParamEnum::ConfigParam8(ton_block::ConfigParam8 {
-                global_version: ton_block::GlobalVersion {
-                    version: 0,
-                    capabilities: 0x2e
-                }
-            }))
-            .expect("Shouldn't fail");
+    fn default_workchains() -> Dict<i32, WorkchainDescription> {
+        let mut workchains = Dict::<i32, WorkchainDescription>::new();
+        workchains.add(0, WorkchainDescription {
+            enabled_since: 0,
+            actual_min_split: 0,
+            min_split: 0,
+            max_split: 0,
+            active: true,
+            accept_msgs: true,
+            zerostate_root_hash: HashBytes::default(),
+            zerostate_file_hash: HashBytes::default(),
+            version: 0,
+            format: WorkchainFormat::Basic(WorkchainFormatBasic {
+                vm_version: 0,
+                vm_mode: 0,
+            }),
+        }).expect("Shouldn't fail");
+        workchains
+    }
 
-        let mut workchains = ton_block::ConfigParam12::default();
+    fn default_raw_config() -> BlockchainConfig {
+        fn store<K: Store + DictKey, V: Store>(dict: &mut Dict::<K, Cell>, key: K, value: V) -> Result<()> {
+            let mut builder = CellBuilder::new();
+            value.store_into(&mut builder, &mut Cell::empty_context())?;
+            dict.add(key, builder.build()?)?;
+            Ok(())
+        }
 
-        let mut workchain_0 = ton_block::WorkchainDescr::default();
-        workchain_0.active = true;
-        workchain_0.accept_msgs = true;
-        workchains.insert(0, &workchain_0).expect("Shouldn't fail");
+        let mut dict = Dict::<u32, Cell>::new();
 
-        params.set_config(ton_block::ConfigParamEnum::ConfigParam12(workchains))
-            .expect("Shouldn't fail");
+        // store(&mut dict, 20, GasLimitsPrices::default_mc()).expect("Shouldn't fail");
+        // store(&mut dict, 21, GasLimitsPrices::default_wc()).expect("Shouldn't fail");
+        // store(&mut dict, 24, MsgForwardPrices::default_mc()).expect("Shouldn't fail");
+        // store(&mut dict, 25, MsgForwardPrices::default_wc()).expect("Shouldn't fail");
+        // store(&mut dict, 18, AccStoragePrices::default()).expect("Shouldn't fail");
+        // store(&mut dict, 31, Self::default_special_contracts()).expect("Shouldn't fail");
+        store(&mut dict, 12, Self::default_workchains()).expect("Shouldn't fail");
+        store(&mut dict, 8, Self::default_global_version()).expect("Shouldn't fail");
 
-        params
+        BlockchainConfig {
+            address: [0x55; 32].into(),
+            params: dict,
+        }
     }
 
     /// Create `BlockchainConfig` struct with `ConfigParams` taken from blockchain
-    pub fn with_config(config: ConfigParams, global_id: i32) -> Result<Self> {
-        Ok(BlockchainConfig {
-            gas_prices_mc: config.gas_prices(true)?,
-            gas_prices_wc: config.gas_prices(false)?,
-            fwd_prices_mc: config.fwd_prices(true)?,
-            fwd_prices_wc: config.fwd_prices(false)?,
-            storage_prices: AccStoragePrices::with_config(&config.storage_prices()?)?,
-            special_contracts: config.fundamental_smc_addr()?,
-            capabilities: config.capabilities(),
-            global_version: config.global_version(),
+    pub fn with_config(config: BlockchainConfig, global_id: i32) -> Result<Self> {
+        Ok(PreloadedBlockchainConfig {
+            gas_prices_mc: config.get_gas_prices(true)?,
+            gas_prices_wc: config.get_gas_prices(false)?,
+            fwd_prices_mc: config.get_msg_forward_prices(true)?,
+            fwd_prices_wc: config.get_msg_forward_prices(false)?,
+            storage_prices: AccStoragePrices::with_config(config.get_storage_prices()?)?,
+            special_contracts: config.get_fundamental_addresses()?.keys()
+                .collect::<std::result::Result<_, _>>()?,
+            workchains: config.get_workchains()?.iter()
+                .collect::<std::result::Result<_, _>>()?,
+            global_version: config.get_global_version()?,
             global_id,
             raw_config: config,
         })
@@ -299,7 +340,7 @@ impl BlockchainConfig {
     }
 
     /// Calculate gas fee for account
-    pub fn calc_gas_fee(&self, gas_used: u64, address: &MsgAddressInt) -> u128 {
+    pub fn calc_gas_fee(&self, gas_used: u64, address: &IntAddr) -> u128 {
         self.get_gas_config(address.is_masterchain()).calc_gas_fee(gas_used)
     }
 
@@ -312,46 +353,44 @@ impl BlockchainConfig {
         }
     }
 
-    /// Calculate forward fee
-    pub fn calc_fwd_fee(&self, is_masterchain: bool, msg_cell: &Cell) -> Result<Grams> {
-        let mut in_fwd_fee = self.get_fwd_prices(is_masterchain).fwd_fee(msg_cell);
-        if self.raw_config.has_capability(GlobalCapabilities::CapFeeInGasUnits) {
-            in_fwd_fee = self.get_gas_config(is_masterchain).calc_gas_fee(in_fwd_fee.try_into()?)
+    /// Calculate forward fee. Root cell must not be accounted is stats.
+    pub fn calc_fwd_fee(&self, is_masterchain: bool, msg_stats_no_root: &CellTreeStats) -> Result<Tokens> {
+        let mut in_fwd_fee = self.get_fwd_prices(is_masterchain).fwd_fee(msg_stats_no_root);
+        if self.global_version.capabilities.contains(GlobalCapability::CapFeeInGasUnits) {
+            in_fwd_fee = self.get_gas_config(is_masterchain).calc_gas_fee(in_fwd_fee.try_into()?);
         }
-        Grams::new(in_fwd_fee)
+        Ok(Tokens::try_from(in_fwd_fee)?)
     }
 
     /// Calculate account storage fee
-    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> Result<Grams> {
+    pub fn calc_storage_fee(&self, storage: &StorageInfo, is_masterchain: bool, now: u32) -> Result<Tokens> {
         let mut storage_fee = self.storage_prices.calc_storage_fee(
-            storage.used().cells().into(),
-            storage.used().bits().into(),
-            storage.last_paid(),
+            storage.used.cells.into_inner(),
+            storage.used.bits.into_inner(),
+            storage.last_paid,
             now,
-            is_masterchain
+            is_masterchain,
         );
-        if self.raw_config.has_capability(GlobalCapabilities::CapFeeInGasUnits) {
-            storage_fee = self.get_gas_config(is_masterchain).calc_gas_fee(storage_fee.try_into()?)
+        if self.global_version.capabilities.contains(GlobalCapability::CapFeeInGasUnits) {
+            storage_fee = self.get_gas_config(is_masterchain).calc_gas_fee(storage_fee.try_into()?);
         }
-        Grams::new(storage_fee)
+        Ok(Tokens::try_from(storage_fee)?)
     }
 
     /// Check if account is special TON account
-    pub fn is_special_account(&self, address: &MsgAddressInt) -> Result<bool> {
+    pub fn is_special_account(&self, address: &IntAddr) -> bool {
         if address.is_masterchain() {
-            let account_id = address.get_address();
-            // special account adresses are stored in hashmap
-            // config account is special too
-            Ok(
-                self.raw_config.config_addr == account_id ||
-                self.special_contracts.get_raw(account_id)?.is_some()
-            )
-        } else {
-            Ok(false)
+            if let Some(account_id) = address.as_std().map(|a| a.address) {
+                // special account adresses are stored in hashmap
+                // config account is special too
+                return self.raw_config.address == account_id ||
+                    self.special_contracts.contains(&account_id.0)
+            }
         }
+        false
     }
 
-    pub fn global_version(&self) -> u32 {
+    pub fn global_version(&self) -> GlobalVersion {
         self.global_version
     }
 
@@ -359,15 +398,11 @@ impl BlockchainConfig {
         &self.storage_prices
     }
 
-    pub fn raw_config(&self) -> &ConfigParams {
+    pub fn workchains(&self) -> &HashMap<i32, WorkchainDescription> {
+        &self.workchains
+    }
+
+    pub fn raw_config(&self) -> &BlockchainConfig {
         &self.raw_config
-    }
-
-    pub fn has_capability(&self, capability: GlobalCapabilities) -> bool {
-        (self.capabilities & (capability as u64)) != 0
-    }
-
-    pub fn capabilites(&self) -> u64 {
-        self.capabilities
     }
 }

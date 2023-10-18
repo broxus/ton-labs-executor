@@ -11,8 +11,6 @@
 * limitations under the License.
 */
 
-#![cfg_attr(feature = "ci_run", deny(warnings))]
-
 pub mod transaction_executor;
 pub use transaction_executor::*;
 
@@ -24,10 +22,10 @@ pub use tick_tock_transaction::TickTockTransactionExecutor;
 
 #[macro_use]
 pub mod error;
-pub use error::*;
 
-pub mod vmsetup;
-pub use vmsetup::*;
+pub(crate) mod vmsetup;
 
 pub mod blockchain_config;
-pub use blockchain_config::*;
+
+pub(crate) mod utils;
+pub(crate) mod ext;
