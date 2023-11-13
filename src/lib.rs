@@ -23,8 +23,6 @@ pub use tick_tock_transaction::TickTockTransactionExecutor;
 #[macro_use]
 pub mod error;
 
-pub(crate) mod vmsetup;
-
 pub mod blockchain_config;
 
 pub(crate) mod utils;

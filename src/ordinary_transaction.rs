@@ -11,51 +11,41 @@
 * limitations under the License.
 */
 
+use std::cmp::min;
 #[cfg(feature = "timings")]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 #[cfg(feature = "timings")]
 use std::time::Instant;
 
-use everscale_types::cell::{Cell, CellSliceRange};
-use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, Lazy, MsgInfo, OptionalAccount, Transaction, TxInfo};
+use everscale_types::cell::{Cell, CellBuilder, CellSliceRange};
+use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, IntAddr, Lazy, MsgInfo, OptionalAccount, Transaction, TxInfo};
 use everscale_types::num::{Tokens, Uint15};
 use everscale_types::prelude::CellFamily;
 use everscale_vm::{
     boolean, int,
-    SmartContractInfo, stack::{integer::IntegerData, Stack, StackItem},
+    stack::{integer::IntegerData, Stack, StackItem},
 };
 use everscale_vm::{error, fail, OwnedCellSlice, types::Result};
-use everscale_vm::executor::BehaviorModifiers;
 
 use crate::{ActionPhaseResult, InputMessage};
-use crate::blockchain_config::{MAX_MSG_CELLS, PreloadedBlockchainConfig, VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES};
+use crate::blockchain_config::{MAX_MSG_CELLS, PreloadedBlockchainConfig, VERSION_GLOBAL_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES};
 use crate::error::ExecutorError;
 use crate::ext::account::AccountExt;
 use crate::ext::extra_currency_collection::ExtraCurrencyCollectionExt;
 use crate::transaction_executor::{ExecuteParams, TransactionExecutor};
-use crate::utils::{create_tx, default_tx_info, storage_stats, store, TxTime};
+use crate::utils::{create_tx, default_tx_info, storage_stats, TxTime};
 
 pub struct OrdinaryTransactionExecutor {
-    config: PreloadedBlockchainConfig,
-    disable_signature_check: bool,
-
     #[cfg(feature = "timings")]
     timings: [AtomicU64; 3], // 0 - preparation, 1 - compute, 2 - after compute
 }
 
 impl OrdinaryTransactionExecutor {
-    pub fn new(config: PreloadedBlockchainConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            config,
-            disable_signature_check: false,
             #[cfg(feature = "timings")]
             timings: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
         }
-    }
-
-    pub fn set_signature_check_disabled(&mut self, disabled: bool) {
-        self.disable_signature_check = disabled;
     }
 
     #[cfg(feature = "timings")]
@@ -65,12 +55,6 @@ impl OrdinaryTransactionExecutor {
 }
 
 impl TransactionExecutor for OrdinaryTransactionExecutor {
-    fn behavior_modifiers(&self) -> BehaviorModifiers {
-        BehaviorModifiers {
-            chksig_always_succeed: self.disable_signature_check,
-        }
-    }
-
     ///
     /// Create end execute transaction from message for account
     fn execute_with_params(
@@ -78,17 +62,31 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         in_msg: Option<&InputMessage>,
         account: &mut OptionalAccount,
         params: &ExecuteParams,
+        config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction> {
         #[cfg(feature = "timings")]
             let mut now = Instant::now();
 
-        let revert_anycast =
-            self.config.global_version().version >= VERSION_BLOCK_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES;
         let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
 
-        let (is_masterchain, account_address, bounce, is_ext_msg, mut msg_balance, ihr_fee) = match &in_msg.data.info {
-            MsgInfo::Int(h) => (h.dst.is_masterchain(), h.dst.clone(), h.bounce, false, h.value.clone(), h.ihr_fee),
-            MsgInfo::ExtIn(h) => (h.dst.is_masterchain(), h.dst.clone(), false, true, CurrencyCollection::default(), Tokens::ZERO),
+        let (acc_addr, bounce, is_ext_msg, mut msg_balance);
+        match &in_msg.data.info {
+            MsgInfo::Int(h) => {
+                acc_addr = &h.dst;
+                bounce = h.bounce;
+                is_ext_msg = false;
+                msg_balance = h.value.clone();
+                let ihr_delivered = false;  // ihr is disabled because it does not work
+                if !ihr_delivered {
+                    msg_balance.tokens += h.ihr_fee;
+                }
+            },
+            MsgInfo::ExtIn(h) => {
+                acc_addr = &h.dst;
+                bounce = false;
+                is_ext_msg = true;
+                msg_balance = CurrencyCollection::default();
+            },
             MsgInfo::ExtOut(_) => fail!(ExecutorError::InvalidExtMessage)
         };
         log::debug!(
@@ -96,52 +94,50 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             "Ordinary transaction executing, in message id: {}",
             in_msg.cell.repr_hash()
         );
-        let Some(account_id) = match account.0.as_ref().map(|a| &a.address) {
-            Some(addr) if addr == &account_address => { &account_address },
-            None => &account_address,
+        if !account.0.as_ref().map_or(true, |a| a.address == *acc_addr) {
+            fail!(ExecutorError::InvalidExtMessage);
+        }
+        let acc_addr = match acc_addr {
+            IntAddr::Std(std) => std,
             _ => fail!(ExecutorError::InvalidExtMessage)
-        }.as_std().map(|a| a.address) else {
-            fail!(ExecutorError::InvalidExtMessage)
         };
         match &account.0 {
-            Some(_) => log::debug!(target: "executor", "Account = {}", account_id),
-            None => log::debug!(target: "executor", "Account = None, address = {}", account_id),
+            Some(_) => log::debug!(target: "executor", "Account = {}", acc_addr),
+            None => log::debug!(target: "executor", "Account = None, address = {}", acc_addr),
         }
 
-        let mut acc_balance = account.balance().clone();
-        let ihr_delivered = false;  // ihr is disabled because it does not work
-        if !ihr_delivered {
-            msg_balance.tokens += ihr_fee;
-        }
-        log::debug!(target: "executor", "acc_balance: {}, msg_balance: {}, credit_first: {}",
-            acc_balance.tokens, msg_balance.tokens, !bounce);
-
-        let is_special = self.config.is_special_account(&account_address);
         let time = TxTime::new(&params, account, Some(&in_msg.data.info));
-        let mut tr = create_tx(account_id, account.status(), &time, Some(in_msg.cell));
+        let mut tr = create_tx(acc_addr.address, account.status(), &time, Some(in_msg.cell));
 
-        let mut description = default_tx_info(!bounce);
+        let mut description = default_tx_info(bounce);
 
-        if revert_anycast && account_address.anycast().is_some() {
+        if acc_addr.anycast.is_some() && config.global_version().version >=
+            VERSION_GLOBAL_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES {
             description.aborted = true;
-            tr.end_status = account.status();
-            params.last_tr_lt.store(time.tx_lt(), Ordering::Relaxed);
             account.0.as_mut().map(|a| a.last_trans_lt = time.tx_lt());
             tr.info = Lazy::new(&TxInfo::Ordinary(description))?;
             return Ok(tr);
         }
 
+        // end of validation
+
+        let mut acc_balance = account.balance().clone();
+
+        log::debug!(target: "executor", "acc_balance: {}, msg_balance: {}, credit_first: {}",
+            acc_balance.tokens, msg_balance.tokens, !bounce);
+
+        let is_special = config.is_special_account(&acc_addr);
+
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
-            // external message comes serialized
-            let in_fwd_fee = self.config.calc_fwd_fee(is_masterchain, &storage_stats(&in_msg.data, false, MAX_MSG_CELLS)?)?;
+            let in_fwd_fee = config.calc_fwd_fee(acc_addr.is_masterchain(), &storage_stats(&in_msg.data, false, MAX_MSG_CELLS)?)?;
             log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee, acc_balance.tokens);
             acc_balance.tokens = acc_balance.tokens.checked_sub(in_fwd_fee).ok_or(ExecutorError::NoFundsToImportMsg)?;
             tr.total_fees.tokens = tr.total_fees.tokens.checked_add(in_fwd_fee).ok_or_else(|| error!("integer overflow"))?;
         }
 
         if description.credit_first && !is_ext_msg {
-            description.credit_phase = match self.credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
+            description.credit_phase = match Self::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
                 Ok(credit_ph) => Some(credit_ph),
                 Err(e) => fail!(
                     ExecutorError::TrExecutorError(
@@ -150,46 +146,41 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 )
             };
         }
-        let due_before_storage = account.0.as_ref()
-            .map(|a| a.storage_stat.due_payment).flatten().map(|a| a.into_inner());
-        let mut storage_fee;
-        description.storage_phase = match self.storage_phase(
+
+        let storage_fee;
+        (description.storage_phase, storage_fee) = Self::storage_phase(
+            config,
             account,
             &mut acc_balance,
             &mut tr.total_fees,
             time.now(),
-            is_masterchain,
+            acc_addr.is_masterchain(),
             is_special
-        ) {
-            Ok(storage_ph) => {
-                storage_fee = storage_ph.storage_fees_collected.into_inner();
-                if let Some(due) = &storage_ph.storage_fees_due {
-                    storage_fee += due.into_inner()
-                }
-                if let Some(due) = due_before_storage {
-                    storage_fee -= due;
-                }
-                Some(storage_ph)
-            },
-            Err(e) => fail!(
-                ExecutorError::TrExecutorError(
-                    format!("cannot create storage phase of a new transaction for smart contract for reason {}", e)
-                )
+        ).map_err(|e| error!(
+            ExecutorError::TrExecutorError(
+                format!("cannot create storage phase of a new transaction for smart contract for reason {}", e)
             )
-        };
+        ))?;
 
-        if description.credit_first && msg_balance.tokens > acc_balance.tokens {
-            msg_balance.tokens = acc_balance.tokens;
+        if description.credit_first {
+            msg_balance.tokens = min(msg_balance.tokens, acc_balance.tokens);
         }
 
         log::debug!(target: "executor",
             "storage_phase: {}", if description.storage_phase.is_some() {"present"} else {"none"});
-        let mut original_acc_balance = account.balance().clone();
-        if let Some(a) = original_acc_balance.tokens.checked_sub(tr.total_fees.tokens) { original_acc_balance.tokens = a };
-        _ = original_acc_balance.other.try_sub_assign(&tr.total_fees.other)?;
+        // pre-compute phase balance, to be used in "reserve" out actions;
+        // does not include msg balance from credit phase. may be initially empty.
+        let original_acc_balance = {
+            let mut original_acc_balance = account.balance().clone();
+            if let Some(tokens) = original_acc_balance.tokens.checked_sub(tr.total_fees.tokens) {
+                original_acc_balance.tokens = tokens;
+            };
+            _ = original_acc_balance.other.try_sub_assign(&tr.total_fees.other)?;
+            original_acc_balance
+        };
 
         if !description.credit_first && !is_ext_msg {
-            description.credit_phase = match self.credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
+            description.credit_phase = match Self::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
                 Ok(credit_ph) => Some(credit_ph),
                 Err(e) => fail!(
                     ExecutorError::TrExecutorError(
@@ -201,25 +192,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         log::debug!(target: "executor",
             "credit_phase: {}", if description.credit_phase.is_some() {"present"} else {"none"});
 
-        let last_paid = if !is_special { params.block_unixtime } else { 0 };
-        account.0.as_mut().map(|a| a.storage_stat.last_paid = last_paid);
         #[cfg(feature = "timings")] {
             self.timings[0].fetch_add(now.elapsed().as_micros() as u64, Ordering::SeqCst);
             now = Instant::now();
         }
 
-        let mut smc_info = SmartContractInfo {
-            capabilities: self.config().global_version().capabilities,
-            myself: OwnedCellSlice::new(store(&account_address)?)?,
-            block_lt: params.block_lt,
-            trans_lt: time.tx_lt(),
-            unix_time: params.block_unixtime,
-            seq_no: params.seq_no,
-            balance: acc_balance.clone(),
-            config_params: self.config().raw_config().params.root().clone(),
-            ..Default::default()
-        };
-        smc_info.calc_rand_seed(params.seed_block, &account_id.0);
         let mut stack = Stack::new();
 
         stack
@@ -237,64 +214,60 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 })?))
             .push(boolean!(is_ext_msg));
         log::debug!(target: "executor", "compute_phase");
-        let (compute_ph, actions, new_data) = match self.compute_phase(
+        let (actions, new_data);
+        (description.compute_phase, actions, new_data) = Self::compute_phase(
+            config,
+            true,
             Some(&in_msg),
             account,
             &mut acc_balance,
             &msg_balance,
-            smc_info,
+            &time,
             stack,
             storage_fee,
-            is_masterchain,
+            acc_addr,
             is_special,
             &params,
-        ) {
-            Ok(result_tuple) => result_tuple,
-            Err(e) => {
-                log::error!(target: "executor", "compute_phase error: {}", e);
-                match e.downcast_ref::<ExecutorError>() {
-                    Some(ExecutorError::NoAcceptError(_, _)) => return Err(e),
-                    _ => fail!(ExecutorError::TrExecutorError(e.to_string()))
-                }
+        ).map_err(|e| {
+            log::error!(target: "executor", "compute_phase error: {}", e);
+            match e.downcast_ref::<ExecutorError>() {
+                Some(ExecutorError::NoAcceptError(_, _)) => e,
+                _ => error!(ExecutorError::TrExecutorError(e.to_string()))
             }
-        };
-        let mut out_msgs = vec![];
-        let mut action_phase_processed = false;
-        let mut compute_phase_gas_fees = Tokens::ZERO;
+        })?;
         // let mut copyleft = None;
-        description.compute_phase = compute_ph;
-        let mut new_acc_balance = acc_balance.clone();
-        description.action_phase = match &description.compute_phase {
+        let mut action_phase_acc_balance = acc_balance.clone();
+        let (compute_phase_gas_fees, mut out_msgs);
+        (description.action_phase, out_msgs) = match &description.compute_phase {
             ComputePhase::Executed(phase) => {
                 compute_phase_gas_fees = phase.gas_fees;
-                tr.total_fees.tokens = tr.total_fees.tokens.checked_add(phase.gas_fees)
+                tr.total_fees.tokens = tr.total_fees.tokens.checked_add(compute_phase_gas_fees)
                     .ok_or_else(|| error!("integer overflow"))?;
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: success");
                     log::debug!(target: "executor", "action_phase: lt={}", time.tx_lt());
-                    action_phase_processed = true;
                     // since the balance is not used anywhere else if we have reached this point,
                     // then we can change it here
-                    match self.action_phase_with_copyleft(
+                    match Self::action_phase_with_copyleft(
+                        config,
                         &mut tr.total_fees.tokens,
                         &time,
                         account,
                         &original_acc_balance,
-                        &mut new_acc_balance,
+                        &mut action_phase_acc_balance,
                         &mut msg_balance,
                         &compute_phase_gas_fees,
                         actions.unwrap_or(Cell::empty_cell()),
-                        &account_address,
+                        &acc_addr,
                         is_special
                     ) {
                         Ok(ActionPhaseResult{phase, messages, copyleft_reward}) => {
-                            out_msgs = messages;
                             if let Some(copyleft_reward) = &copyleft_reward {
                                 tr.total_fees.tokens = tr.total_fees.tokens.checked_sub(copyleft_reward.reward)
                                     .ok_or_else(|| error!("integer underflow"))?;
                             }
                             // copyleft = copyleft_reward;
-                            Some(phase)
+                            (Some(phase),  messages)
                         }
                         Err(e) => fail!(
                             ExecutorError::TrExecutorError(
@@ -304,15 +277,16 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     }
                 } else {
                     log::debug!(target: "executor", "compute_phase: failed");
-                    None
+                    (None, vec![])
                 }
             }
             ComputePhase::Skipped(skipped) => {
+                compute_phase_gas_fees = Tokens::ZERO;
                 log::debug!(target: "executor", "compute_phase: skipped reason {:?}", skipped.reason);
                 if is_ext_msg {
                     fail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
                 }
-                None
+                (None, vec![])
             }
         };
         if description.action_phase.as_ref().map_or(false, |a| a.success) {
@@ -339,7 +313,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     description.destroyed = true;
                 }
                 if phase.success {
-                    acc_balance = new_acc_balance;
+                    acc_balance = action_phase_acc_balance;
                 }
                 !phase.success
             }
@@ -351,10 +325,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         log::debug!(target: "executor", "Description.aborted {}", description.aborted);
         if description.aborted && !is_ext_msg && bounce {
-            if !action_phase_processed || self.config().global_version().capabilities.contains(GlobalCapability::CapBounceAfterFailedAction) {
+            if description.action_phase.is_none() || config.global_version().capabilities.contains(GlobalCapability::CapBounceAfterFailedAction) {
                 log::debug!(target: "executor", "bounce_phase");
                 let msg_index = description.action_phase.as_ref().map_or(0, |a| a.messages_created);
-                description.bounce_phase = match self.bounce_phase(
+                description.bounce_phase = match Self::bounce_phase(
+                    config,
                     msg_balance.clone(),
                     &mut acc_balance,
                     &compute_phase_gas_fees,
@@ -362,7 +337,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     &in_msg.data,
                     &mut tr.total_fees.tokens,
                     &time,
-                    &account_address,
+                    &acc_addr,
                     params.block_version,
                 ) {
                     Ok((bounce_ph, Some(bounce_msg))) => {
@@ -383,52 +358,26 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 log::debug!(target: "executor", "restore balance {} => {}", acc_balance.tokens, original_acc_balance.tokens);
                 acc_balance = original_acc_balance;
             } else if account.0.is_none() && (acc_balance.tokens.is_zero() && acc_balance.other.is_zero()?) {
-                *account = OptionalAccount(Some(Account::uninit(
-                    account_address.clone(),
-                    0,
-                    last_paid,
-                    acc_balance.clone(),
-                )?));
+                let mut acc = Account::uninit(acc_addr, &acc_balance)?;
+                if !is_special { acc.storage_stat.last_paid = time.now() };
+                *account = OptionalAccount(Some(acc));
             }
         }
         if account.status() == AccountStatus::Uninit && acc_balance.tokens.is_zero() && acc_balance.other.is_zero()? {
             *account = OptionalAccount::EMPTY;
         }
-        tr.end_status = account.status();
         log::debug!(target: "executor", "set balance {}", acc_balance.tokens);
         account.0.as_mut().map(|a| a.balance = acc_balance);
         log::debug!(target: "executor", "add messages");
-        params.last_tr_lt.store(time.tx_lt(), Ordering::Relaxed);
         account.0.as_mut().map(|a| a.last_trans_lt = time.non_aborted_account_lt(out_msgs.len()));
         tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
         for (msg_index, msg) in out_msgs.into_iter().enumerate() {
             tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
         }
-        tr.info = Lazy::from_raw(store(TxInfo::Ordinary(description))?);
+        tr.info = Lazy::from_raw(CellBuilder::build_from(TxInfo::Ordinary(description))?);
         #[cfg(feature="timings")]
         self.timings[2].fetch_add(now.elapsed().as_micros() as u64, Ordering::SeqCst);
         // tr.set_copyleft_reward(copyleft);
         Ok(tr)
-    }
-    fn ordinary_transaction(&self) -> bool { true }
-    fn config(&self) -> &PreloadedBlockchainConfig { &self.config }
-    fn build_stack(&self, in_msg: Option<&InputMessage>, account: &OptionalAccount) -> Result<Stack> {
-        let mut stack = Stack::new();
-        let Some(in_msg) = in_msg else { return Ok(stack) };
-        let (msg_tokens, is_inbound_external) = match &in_msg.data.info {
-            MsgInfo::Int(h) => (h.value.tokens, false),
-            MsgInfo::ExtIn(_) => (Tokens::ZERO, true),
-            MsgInfo::ExtOut(_) => (Tokens::ZERO, false),
-        };
-        let acc_balance = int!(account.balance().tokens.into_inner());
-        let msg_balance = int!(msg_tokens.into_inner());
-        let function_selector = boolean!(is_inbound_external);
-        stack
-            .push(acc_balance)
-            .push(msg_balance)
-            .push(StackItem::Cell(in_msg.cell.clone()))
-            .push(StackItem::Slice(OwnedCellSlice::try_from(in_msg.data.body.clone())?))
-            .push(function_selector);
-        Ok(stack)
     }
 }

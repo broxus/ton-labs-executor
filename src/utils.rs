@@ -9,13 +9,6 @@ use everscale_types::prelude::{CellBuilder, Dict, HashBytes, Store};
 
 use crate::ExecuteParams;
 
-#[inline]
-pub fn store<S: Store>(s: S) -> StdResult<Cell, types::Error> {
-    let mut builder = CellBuilder::new();
-    s.store_into(&mut builder, &mut Cell::empty_context())?;
-    builder.build()
-}
-
 pub fn storage_stats<S: Store>(
     s: S,
     with_root_cell: bool,
@@ -67,7 +60,7 @@ impl TxTime {
     pub fn tx_lt(&self) -> u64 {
         self.tx_lt
     }
-    pub fn set_msg_time(&self, msg_info: &mut MsgInfo, msg_index: usize) {
+    pub fn write_msg_time(&self, msg_info: &mut MsgInfo, msg_index: usize) {
         match msg_info {
             MsgInfo::Int(h) => {
                 h.created_lt = self.tx_lt + 1 + msg_index as u64;
@@ -113,9 +106,9 @@ pub fn create_tx(
     }
 }
 
-pub fn default_tx_info(credit_first: bool) -> OrdinaryTxInfo {
+pub fn default_tx_info(bounce: bool) -> OrdinaryTxInfo {
     OrdinaryTxInfo {
-        credit_first,
+        credit_first: !bounce,
         storage_phase: None,
         credit_phase: None,
         compute_phase: ComputePhase::Skipped(SkippedComputePhase {

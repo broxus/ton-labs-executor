@@ -1,9 +1,6 @@
-use everscale_types::cell::{CellBuilder};
-use everscale_types::models::{
-    Account, AccountState, CurrencyCollection, IntAddr, StorageInfo, StorageUsed,
-};
+use everscale_types::cell::CellBuilder;
+use everscale_types::models::{Account, AccountState, CurrencyCollection, IntAddr, StdAddr, StorageInfo, StorageUsed};
 use everscale_types::num::VarUint56;
-use everscale_types::prelude::{Cell, CellFamily, Store};
 use everscale_vm::types::Result;
 
 use crate::blockchain_config::MAX_ACCOUNT_CELLS;
@@ -11,10 +8,8 @@ use crate::utils::storage_stats;
 
 pub trait AccountExt {
     fn uninit(
-        address: IntAddr,
-        last_trans_lt: u64,
-        last_paid: u32,
-        balance: CurrencyCollection,
+        acc_addr: &StdAddr,
+        balance: &CurrencyCollection,
     ) -> Result<Account>;
 
     fn update_storage_stat(&mut self) -> Result<()>;
@@ -23,20 +18,14 @@ pub trait AccountExt {
 
 impl AccountExt for Account {
     fn uninit(
-        address: IntAddr,
-        last_trans_lt: u64,
-        last_paid: u32,
-        balance: CurrencyCollection,
+        acc_addr: &StdAddr,
+        balance: &CurrencyCollection,
     ) -> Result<Account> {
         let acc = Account {
-            address,
-            storage_stat: StorageInfo {
-                used: StorageUsed::default(),
-                last_paid,
-                due_payment: None,
-            },
-            last_trans_lt,
-            balance,
+            address: IntAddr::Std(acc_addr.clone()),
+            storage_stat: StorageInfo::default(),
+            last_trans_lt: 0,
+            balance: balance.clone(),
             state: AccountState::Uninit,
             init_code_hash: None,
         };
@@ -46,7 +35,7 @@ impl AccountExt for Account {
     }
 
     fn update_storage_stat(&mut self) -> Result<()> {
-        let stats = if let Some(init_code_hash) = self.init_code_hash {
+        let stats = if let Some(init_code_hash) = self.init_code_hash.as_ref() {
             let data = (self.last_trans_lt, &self.balance, &self.state, init_code_hash);
             storage_stats(data, true, MAX_ACCOUNT_CELLS)?
         } else {
@@ -62,15 +51,13 @@ impl AccountExt for Account {
     }
 
     fn update_storage_stat_fast(&mut self) -> Result<()> {
-        let mut builder = CellBuilder::new();
-        if let Some(init_code_hash) = self.init_code_hash {
+        let stats = if let Some(init_code_hash) = self.init_code_hash.as_ref() {
             let data = (self.last_trans_lt, &self.balance, &self.state, init_code_hash);
-            data.store_into(&mut builder, &mut Cell::empty_context())?;
+            CellBuilder::build_from(data)?.stats()
         } else {
             let data = (self.last_trans_lt, &self.balance, &self.state);
-            data.store_into(&mut builder, &mut Cell::empty_context())?;
+            CellBuilder::build_from(data)?.stats()
         };
-        let stats = builder.build()?.stats();
         self.storage_stat.used = StorageUsed {
             cells: VarUint56::new(stats.cell_count),
             bits: VarUint56::new(stats.bit_count),
