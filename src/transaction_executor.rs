@@ -358,7 +358,7 @@ pub trait TransactionExecutor {
             trans_lt: time.tx_lt(),
             unix_time: time.now(),
             balance: acc_balance.clone(),
-            config_params: config.raw_config().params.root().clone(),
+            config_params: config.raw_config().params.as_dict().root().clone(),
             mycode: code.clone(),
             rand_seed: SmartContractInfo::calc_rand_seed(&params.seed_block, &acc_addr.address),
             actions: 0,

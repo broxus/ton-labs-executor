@@ -14,11 +14,10 @@
 
 use ahash::{HashMap, HashSet};
 use everscale_types::cell::{CellTreeStats, HashBytes};
-use everscale_types::dict::DictKey;
 use everscale_types::error::Error;
 use everscale_types::models::{BlockchainConfig, GasLimitsPrices, GlobalCapabilities, GlobalCapability, GlobalVersion, MsgForwardPrices, StdAddr, StorageInfo, StoragePrices, WorkchainDescription, WorkchainFormat, WorkchainFormatBasic};
 use everscale_types::num::Tokens;
-use everscale_types::prelude::{Cell, CellBuilder, Dict, Store};
+use everscale_types::prelude::{CellBuilder, Dict, Store};
 use everscale_vm::types::Result;
 
 use crate::ext::gas_limit_prices::GasLimitsPricesExt;
@@ -295,11 +294,12 @@ impl PreloadedBlockchainConfig {
     }
 
     fn default_raw_config() -> BlockchainConfig {
-        fn store<K: Store + DictKey, V: Store>(dict: &mut Dict::<K, Cell>, key: K, value: V) {
-            CellBuilder::build_from(value).and_then(|a| dict.add(key, a)).expect("Shouldn't fail");
+        fn store<V: Store>(config: &mut BlockchainConfig, id: u32, value: V) {
+            let cell = CellBuilder::build_from(value).expect("Shouldn't fail");
+            config.set_raw(id, cell).expect("Shouldn't fail");
         }
 
-        let mut dict = Dict::<u32, Cell>::new();
+        let mut config = BlockchainConfig::new_empty([0x55; 32].into());
 
         // store(&mut dict, 20, GasLimitsPrices::default_mc());
         // store(&mut dict, 21, GasLimitsPrices::default_wc());
@@ -307,13 +307,10 @@ impl PreloadedBlockchainConfig {
         // store(&mut dict, 25, MsgForwardPrices::default_wc());
         // store(&mut dict, 18, AccStoragePrices::default());
         // store(&mut dict, 31, Self::default_special_contracts());
-        store(&mut dict, 12, Self::default_workchains());
-        store(&mut dict, 8, Self::default_global_version());
+        store(&mut config, 12, Self::default_workchains());
+        store(&mut config, 8, Self::default_global_version());
 
-        BlockchainConfig {
-            address: [0x55; 32].into(),
-            params: dict,
-        }
+        config
     }
 
     /// Create `BlockchainConfig` struct with `ConfigParams` taken from blockchain
@@ -381,7 +378,7 @@ impl PreloadedBlockchainConfig {
         // config account is special too
         acc_addr.is_masterchain() && (
             self.raw_config.address == acc_addr.address ||
-                self.special_contracts.contains(&acc_addr.address.0)
+                self.special_contracts.contains(&acc_addr.address)
         )
     }
 
