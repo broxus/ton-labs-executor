@@ -16,11 +16,12 @@ use std::cmp::min;
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "timings")]
 use std::time::Instant;
+use anyhow::Context;
 
 use everscale_types::cell::{Cell, CellBuilder, CellSliceRange};
-use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, IntAddr, Lazy, MsgInfo, OptionalAccount, Transaction, TxInfo};
+use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, IntAddr, Lazy, MsgInfo, OptionalAccount, OwnedMessage, Transaction, TxInfo};
 use everscale_types::num::{Tokens, Uint15};
-use everscale_types::prelude::CellFamily;
+use everscale_types::prelude::{CellFamily, Load};
 use everscale_vm::{
     boolean, int,
     stack::{integer::IntegerData, Stack, StackItem},
@@ -59,7 +60,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
     /// Create end execute transaction from message for account
     fn execute_with_params(
         &self,
-        in_msg: Option<&InputMessage>,
+        in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
@@ -68,6 +69,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             let mut now = Instant::now();
 
         let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
+        let in_msg = InputMessage {
+            cell: in_msg,
+            data: &OwnedMessage::load_from(
+                &mut in_msg.as_slice().context("input message as slice")?
+            ).context("load input message from slice")?
+        };
 
         let (acc_addr, bounce, is_ext_msg, mut msg_balance);
         match &in_msg.data.info {

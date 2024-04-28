@@ -21,7 +21,7 @@ use everscale_vm::{
 };
 use everscale_vm::{error, fail, types::Result};
 
-use crate::{ActionPhaseResult, error::ExecutorError, ExecuteParams, InputMessage, TransactionExecutor};
+use crate::{ActionPhaseResult, error::ExecutorError, ExecuteParams, TransactionExecutor};
 use crate::blockchain_config::PreloadedBlockchainConfig;
 use crate::utils::{create_tx, TxTime};
 
@@ -42,7 +42,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
     /// Create end execute tick or tock transaction for special account
     fn execute_with_params(
         &self,
-        in_msg: Option<&InputMessage>,
+        in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,

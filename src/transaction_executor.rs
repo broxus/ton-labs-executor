@@ -88,14 +88,14 @@ impl Default for ExecuteParams {
 pub trait TransactionExecutor {
     fn execute_with_params(
         &self,
-        in_msg: Option<&InputMessage>,
+        in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction>;
     fn execute_with_libs_and_params(
         &self,
-        in_msg: Option<&InputMessage>,
+        in_msg: Option<&Cell>,
         account_root: &mut Cell,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
