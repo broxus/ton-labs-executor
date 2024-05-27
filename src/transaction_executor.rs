@@ -142,9 +142,9 @@ impl Common {
         is_masterchain: bool,
         is_special: bool
     ) -> Result<(Option<StoragePhase>, Tokens)> {
-        log::debug!(target: "executor", "storage_phase");
+        tracing::debug!(target: "executor", "storage_phase");
         let Some(ref mut acc) = acc_opt.0 else {
-            log::debug!(target: "executor", "Account::None");
+            tracing::debug!(target: "executor", "Account::None");
             // FIXME must be skipped (None), left for compatibility
             return Ok((Some(StoragePhase{
                 storage_fees_collected: Tokens::ZERO,
@@ -153,7 +153,7 @@ impl Common {
             }), Tokens::ZERO))
         };
         if is_special {
-            log::debug!(target: "executor", "Special account: AccStatusChange::Unchanged");
+            tracing::debug!(target: "executor", "Special account: AccStatusChange::Unchanged");
             acc.storage_stat.last_paid = 0;
             return Ok((Some(StoragePhase {
                 storage_fees_collected: Tokens::ZERO,
@@ -174,7 +174,7 @@ impl Common {
         }
 
         if acc_balance.tokens >= fee {
-            log::debug!(target: "executor", "acc_balance: {}, storage fee: {}", acc_balance.tokens, fee);
+            tracing::debug!(target: "executor", "acc_balance: {}, storage fee: {}", acc_balance.tokens, fee);
             acc_balance.tokens = acc_balance.tokens.checked_sub(fee).ok_or_else(|| error!("integer underflow"))?;
             tr_total_fees.tokens = tr_total_fees.tokens.checked_add(fee).ok_or_else(|| error!("integer overflow"))?;
             Ok((Some(StoragePhase {
@@ -183,7 +183,7 @@ impl Common {
                 status_change: AccountStatusChange::Unchanged,
             }), calculated_fee))
         } else {
-            log::debug!(target: "executor", "acc_balance: {} is storage fee from total: {}", acc_balance.tokens, fee);
+            tracing::debug!(target: "executor", "acc_balance: {} is storage fee from total: {}", acc_balance.tokens, fee);
             let storage_fees_collected = std::mem::take(&mut acc_balance.tokens);
             tr_total_fees.tokens = tr_total_fees.tokens.checked_add(storage_fees_collected)
                 .ok_or_else(|| error!("integer overflow"))?;
@@ -244,7 +244,7 @@ impl Common {
             Some(collected).filter(|a| !a.is_zero())
         } else { None };
 
-        log::debug!(
+        tracing::debug!(
             target: "executor",
             "credit_phase: add funds {} to {}",
             msg_balance.tokens, acc_balance.tokens
@@ -279,7 +279,7 @@ impl Common {
         let libs_disabled = !config.global_version().capabilities.contains(GlobalCapability::CapSetLibCode);
         let is_external = if let Some(msg) = msg {
             if let MsgInfo::Int(header) = &msg.data.info {
-                log::debug!(target: "executor", "msg internal, bounce: {}", header.bounce);
+                tracing::debug!(target: "executor", "msg internal, bounce: {}", header.bounce);
                 if result_acc.0.is_none() {
                     if let Some(mut new_acc) = account_from_message(msg, msg_balance, init_code_hash, libs_disabled).ok().flatten() {
                         if !is_special { new_acc.storage_stat.last_paid = time.now() };
@@ -294,23 +294,23 @@ impl Common {
                 }
                 false
             } else {
-                log::debug!(target: "executor", "msg external");
+                tracing::debug!(target: "executor", "msg external");
                 true
             }
         } else {
             debug_assert!(result_acc.0.is_some());
             false
         };
-        log::debug!(target: "executor", "acc balance: {}", acc_balance.tokens);
-        log::debug!(target: "executor", "msg balance: {}", msg_balance.tokens);
+        tracing::debug!(target: "executor", "acc balance: {}", acc_balance.tokens);
+        tracing::debug!(target: "executor", "msg balance: {}", msg_balance.tokens);
         if acc_balance.tokens.is_zero() {
-            log::debug!(target: "executor", "skip computing phase no gas");
+            tracing::debug!(target: "executor", "skip computing phase no gas");
             return Ok((ComputePhase::Skipped(SkippedComputePhase { reason: ComputePhaseSkipReason::NoGas }), None, None))
         }
         let gas_config = config.get_gas_config(acc_addr.is_masterchain());
         let gas = gas_config.init_gas(&acc_balance.tokens, &msg_balance.tokens, is_external, is_special, is_ordinary)?;
         if gas.limit() == 0 && gas.credit() == 0 {
-            log::debug!(target: "executor", "skip computing phase no gas");
+            tracing::debug!(target: "executor", "skip computing phase no gas");
             return Ok((ComputePhase::Skipped(SkippedComputePhase { reason: ComputePhaseSkipReason::NoGas }), None, None))
         }
 
@@ -348,7 +348,7 @@ impl Common {
                     vm_phase.success = false;
                     vm_phase.gas_fees = if is_special { Tokens::ZERO } else { gas_config.calc_gas_fee(0) };
                     acc_balance.tokens = acc_balance.tokens.checked_sub(vm_phase.gas_fees).ok_or_else(|| {
-                        log::debug!(target: "executor", "can't sub funds: {} from acc_balance: {}", vm_phase.gas_fees, acc_balance.tokens);
+                        tracing::debug!(target: "executor", "can't sub funds: {} from acc_balance: {}", vm_phase.gas_fees, acc_balance.tokens);
                         error!("can't sub funds: from acc_balance")
                     })?;
                     *acc = result_acc;
@@ -386,11 +386,11 @@ impl Common {
             .build()?;
 
         let result = vm.execute();
-        log::trace!(target: "executor", "execute result: {:?}", result);
+        tracing::trace!(target: "executor", "execute result: {:?}", result);
         let mut raw_exit_arg = None;
         match result {
             Err(err) => {
-                log::debug!(target: "executor", "VM terminated with exception: {}", err);
+                tracing::debug!(target: "executor", "VM terminated with exception: {}", err);
                 let exception = tvm_exception(err)?;
                 vm_phase.exit_code = if let Some(code) = exception.custom_code() {
                     code
@@ -410,7 +410,7 @@ impl Common {
             Ok(exit_code) => vm_phase.exit_code = exit_code
         };
         vm_phase.success = vm.get_committed_state().is_committed();
-        log::debug!(target: "executor", "VM terminated with exit code {}", vm_phase.exit_code);
+        tracing::debug!(target: "executor", "VM terminated with exit code {}", vm_phase.exit_code);
 
         //for external messages gas will not be exacted if VM throws the exception and gas_credit != 0
         let used = vm.gas().vm_total_used();
@@ -424,7 +424,7 @@ impl Common {
             vm_phase.gas_fees = if is_special { Tokens::ZERO } else { gas_config.calc_gas_fee(used) };
         };
 
-        log::debug!(
+        tracing::debug!(
             target: "executor",
             "gas after: gl: {}, gc: {}, gu: {}, fees: {}",
             vm.gas().limit(), vm.gas().credit(), used, vm_phase.gas_fees
@@ -434,16 +434,16 @@ impl Common {
         vm_phase.mode = 0;
         vm_phase.vm_steps = vm.steps();
         //TODO: vm_final_state_hash
-        log::debug!(target: "executor", "acc_balance: {}, gas fees: {}", acc_balance.tokens, vm_phase.gas_fees);
+        tracing::debug!(target: "executor", "acc_balance: {}, gas fees: {}", acc_balance.tokens, vm_phase.gas_fees);
         acc_balance.tokens = acc_balance.tokens.checked_sub(vm_phase.gas_fees).ok_or_else(|| {
-            log::error!(target: "executor", "This situation is unreachable: can't sub funds: {} from acc_balance: {}", vm_phase.gas_fees, acc_balance.tokens);
+            tracing::error!(target: "executor", "This situation is unreachable: can't sub funds: {} from acc_balance: {}", vm_phase.gas_fees, acc_balance.tokens);
             error!("can't sub funds: from acc_balance")
         })?;
 
         let new_data = if let Ok(cell) = vm.get_committed_state().get_root().as_cell() {
             Some(cell.clone())
         } else {
-            log::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
+            tracing::debug!(target: "executor", "invalid contract, it must be cell in c4 register");
             vm_phase.success = false;
             None
         };
@@ -451,7 +451,7 @@ impl Common {
         let out_actions = if let Ok(root_cell) = vm.get_committed_state().get_actions().as_cell() {
             Some(root_cell.clone())
         } else {
-            log::debug!(target: "executor", "invalid contract, it must be cell in c5 register");
+            tracing::debug!(target: "executor", "invalid contract, it must be cell in c5 register");
             vm_phase.success = false;
             None
         };
@@ -512,7 +512,7 @@ impl Common {
             if err_code == ActionError::Unsupported {
                 err_code = ActionError::UnknownOrInvalidAction;
             }
-            log::debug!(target: "executor", "action failed: error_code={:?}", err_code);
+            tracing::debug!(target: "executor", "action failed: error_code={:?}", err_code);
             phase.valid = true;
             phase.result_code = err_code as i32;
             if action_index != 0 {
@@ -527,7 +527,7 @@ impl Common {
         for action in OutActionsRevIter::new(actions_cell.as_slice()?) {
             phase.total_actions += 1;
             if phase.total_actions > MAX_ACTIONS {
-                log::debug!(target: "executor", "too many actions, more than {MAX_ACTIONS}");
+                tracing::debug!(target: "executor", "too many actions, more than {MAX_ACTIONS}");
                 phase.result_code = ActionError::TooManyActions as i32;
                 return Ok(ActionPhaseResult { phase, messages: vec![], copyleft_reward: None })
             }
@@ -549,7 +549,7 @@ impl Common {
         }
         let mut out_msgs_temp = vec![];
         for (action_index, action) in reversed_actions.into_iter().rev().enumerate() {
-            log::debug!(target: "executor", "\nAction #{}\nType: {}\nInitial balance: {}",
+            tracing::debug!(target: "executor", "\nAction #{}\nType: {}\nInitial balance: {}",
                 action_index,
                 action_type(&action),
                 balance_to_string(&acc_remaining_balance)
@@ -560,7 +560,7 @@ impl Common {
                     let out_msg = out_msg.load()?;
                     if mode.contains(SendMsgFlags::ALL_BALANCE) {
                         out_msgs_temp.push(EitherMsg::Postponed((action_index, mode, out_msg)));
-                        log::debug!(target: "executor", "Message with flag `send ALL_BALANCE` will be sent last. Skip it for now.");
+                        tracing::debug!(target: "executor", "Message with flag `send ALL_BALANCE` will be sent last. Skip it for now.");
                         continue
                     }
                     outmsg_action_handler(
@@ -604,7 +604,7 @@ impl Common {
             };
             if let Some(a) = init_balance.tokens.checked_sub(acc_remaining_balance.tokens) { init_balance.tokens = a };
             _ = init_balance.other.try_sub_assign(&acc_remaining_balance.other)?;
-            log::debug!(target: "executor", "Final balance:   {}\nDelta:           {}",
+            tracing::debug!(target: "executor", "Final balance:   {}\nDelta:           {}",
                 balance_to_string(&acc_remaining_balance),
                 balance_to_string(&init_balance)
             );
@@ -618,7 +618,7 @@ impl Common {
         for (msg_index, element) in out_msgs_temp.into_iter().enumerate() {
             match element {
                 EitherMsg::Postponed((action_index, mode, out_msg)) => {
-                    log::debug!(target: "executor", "\nSend message with all balance:\nInitial balance: {}",
+                    tracing::debug!(target: "executor", "\nSend message with all balance:\nInitial balance: {}",
                 balance_to_string(&acc_remaining_balance));
                     let err_code = outmsg_action_handler(
                         &mut phase,
@@ -636,7 +636,7 @@ impl Common {
                         &mut account_deleted,
                     ).map(|out_msg| out_msg.map(|a| out_msgs.push(a)))
                         .err();
-                    log::debug!(target: "executor", "Final balance:   {}", balance_to_string(&acc_remaining_balance));
+                    tracing::debug!(target: "executor", "Final balance:   {}", balance_to_string(&acc_remaining_balance));
                     if let Some(err_code) = err_code {
                         process_err_code(err_code, action_index, &mut phase);
                         return Ok(ActionPhaseResult { phase, messages: vec![], copyleft_reward })
@@ -649,7 +649,7 @@ impl Common {
         }
 
         //calc new account balance
-        log::debug!(target: "executor", "\nReturn reserved balance:\nInitial:  {}\nReserved: {}",
+        tracing::debug!(target: "executor", "\nReturn reserved balance:\nInitial:  {}\nReserved: {}",
             balance_to_string(&acc_remaining_balance),
             balance_to_string(&total_reserved_value)
         );
@@ -657,18 +657,18 @@ impl Common {
             .map(|tokens| acc_remaining_balance.tokens = tokens)
             .map(|_| acc_remaining_balance.other.try_add_assign(&total_reserved_value.other))
             .ok_or_else(|| anyhow::Error::msg("integer overflow")) {
-            log::debug!(target: "executor", "failed to add account balance with reserved value {}", err);
+            tracing::debug!(target: "executor", "failed to add account balance with reserved value {}", err);
             fail!("failed to add account balance with reserved value {}", err)
         }
-        log::debug!(target: "executor", "Final:    {}", balance_to_string(&acc_remaining_balance));
+        tracing::debug!(target: "executor", "Final:    {}", balance_to_string(&acc_remaining_balance));
 
         let fee = phase.total_action_fees.unwrap_or(Tokens::ZERO);
-        log::debug!(target: "executor", "Total action fees: {}", fee);
+        tracing::debug!(target: "executor", "Total action fees: {}", fee);
         *tr_total_fees_tokens = tr_total_fees_tokens.checked_add(fee)
             .ok_or_else(|| error!("integer overflow"))?;
 
         if account_deleted {
-            log::debug!(target: "executor", "\nAccount deleted");
+            tracing::debug!(target: "executor", "\nAccount deleted");
             phase.status_change = AccountStatusChange::Deleted;
         }
         phase.valid = true;
@@ -709,7 +709,7 @@ impl Common {
         match check_rewrite_dest_addr(&header.dst, config, acc_addr) {
             Ok(new_dst) => {header.dst = new_dst}
             Err(_) => {
-                log::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
+                tracing::warn!(target: "executor", "Incorrect destination address in a bounced message {}", header.dst);
                 fail!("Incorrect destination address in a bounced message {}", header.dst)
             }
         }
@@ -769,10 +769,10 @@ impl Common {
         let fwd_mine_fees = fwd_prices.mine_fee(&fwd_full_fees).ok_or_else(|| error!("integer overflow"))?;
         let fwd_fees = fwd_full_fees - fwd_mine_fees;
 
-        log::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, remaining_msg_balance.tokens.into_inner());
+        tracing::debug!(target: "executor", "get fee {} from bounce msg {}", fwd_full_fees, remaining_msg_balance.tokens.into_inner());
 
         if remaining_msg_balance.tokens < fwd_full_fees + *compute_phase_fees {
-            log::debug!(
+            tracing::debug!(
                 target: "executor", "bounce phase - not enough tokens {} to get fwd fee {}",
                 remaining_msg_balance.tokens, fwd_full_fees
             );
@@ -789,7 +789,7 @@ impl Common {
         if let MsgInfo::Int(ref mut header) = bounce_msg.info {
             header.value = remaining_msg_balance;
             header.fwd_fee = fwd_fees;
-            log::debug!(
+            tracing::debug!(
                 target: "executor",
                 "bounce fees: {} bounce value: {}",
                 fwd_mine_fees, header.value.tokens
@@ -870,42 +870,42 @@ fn compute_new_state(
     init_code_hash: bool,
     disable_set_lib: bool,
 ) -> Option<ComputePhaseSkipReason> {
-    log::debug!(target: "executor", "compute_account_state");
+    tracing::debug!(target: "executor", "compute_account_state");
     let Some(ref mut acc) = acc.0 else {
-        log::error!(target: "executor", "account must exist");
+        tracing::error!(target: "executor", "account must exist");
         return Some(if in_msg.data.init.is_none() { ComputePhaseSkipReason::NoState } else { ComputePhaseSkipReason::BadState });
     };
     match acc.state {
         //Account exists, but can be in different states.
         AccountState::Active(_) => {
             //account is active, just return it
-            log::debug!(target: "executor", "account state: AccountActive");
+            tracing::debug!(target: "executor", "account state: AccountActive");
             None
         }
         AccountState::Uninit => {
-            log::debug!(target: "executor", "AccountUninit");
+            tracing::debug!(target: "executor", "AccountUninit");
             if let Some(state_init) = &in_msg.data.init {
                 // if msg is a constructor message then
                 // borrow code and data from it and switch account state to 'active'.
-                log::debug!(target: "executor", "message for uninitialized: activated");
+                tracing::debug!(target: "executor", "message for uninitialized: activated");
                 let text = "Cannot construct account from message with hash";
                 if !check_libraries(state_init, disable_set_lib, text, in_msg.cell.as_ref()) {
                     return Some(ComputePhaseSkipReason::BadState);
                 }
                 match try_activate_by_init_code_hash(acc, state_init, init_code_hash) {
                     Err(err) => {
-                        log::debug!(target: "executor", "reason: {}", err);
+                        tracing::debug!(target: "executor", "reason: {}", err);
                         Some(ComputePhaseSkipReason::BadState)
                     }
                     Ok(_) => None
                 }
             } else {
-                log::debug!(target: "executor", "message for uninitialized: skip computing phase");
+                tracing::debug!(target: "executor", "message for uninitialized: skip computing phase");
                 Some(ComputePhaseSkipReason::NoState)
             }
         }
         AccountState::Frozen(_) => {
-            log::debug!(target: "executor", "AccountFrozen");
+            tracing::debug!(target: "executor", "AccountFrozen");
             //account balance was credited and if it positive after that
             //and inbound message bear code and data then make some check and unfreeze account
             if !acc_balance.tokens.is_zero() { // This check is redundant
@@ -914,10 +914,10 @@ fn compute_new_state(
                     if !check_libraries(state_init, disable_set_lib, text, in_msg.cell.as_ref()) {
                         return Some(ComputePhaseSkipReason::BadState);
                     }
-                    log::debug!(target: "executor", "message for frozen: activated");
+                    tracing::debug!(target: "executor", "message for frozen: activated");
                     return match try_activate_by_init_code_hash(acc, state_init, init_code_hash) {
                         Err(err) => {
-                            log::debug!(target: "executor", "reason: {}", err);
+                            tracing::debug!(target: "executor", "reason: {}", err);
                             Some(ComputePhaseSkipReason::BadState)
                         }
                         Ok(_) => None
@@ -925,7 +925,7 @@ fn compute_new_state(
                 }
             }
             //skip computing phase, because account is frozen (bad state)
-            log::debug!(target: "executor", "account is frozen (bad state): skip computing phase");
+            tracing::debug!(target: "executor", "account is frozen (bad state): skip computing phase");
             Some(ComputePhaseSkipReason::NoState)
         }
     }
@@ -1058,7 +1058,7 @@ fn check_rewrite_dest_addr(
     let cap_workchains = config.global_version().capabilities.contains(GlobalCapability::CapWorkchains);
     if workchain != ShardIdent::MASTERCHAIN.workchain() {
         if !cap_workchains && !acc_addr.is_masterchain() && acc_addr.workchain as i32 != workchain {
-            log::debug!(
+            tracing::debug!(
                 target: "executor",
                 "cannot send message from {} to {} it doesn't allow yet",
                 acc_addr, dst
@@ -1067,7 +1067,7 @@ fn check_rewrite_dest_addr(
         }
         if let Some(wc) = config.workchains().get(&workchain) {
             if !wc.accept_msgs {
-                log::debug!(
+                tracing::debug!(
                     target: "executor",
                     "destination address belongs to workchain {} not accepting new messages",
                     workchain
@@ -1076,7 +1076,7 @@ fn check_rewrite_dest_addr(
             }
             if let WorkchainFormat::Extended(wf) = &wc.format {
                 if !is_valid_addr_len(addr_len, wf) {
-                    log::debug!(
+                    tracing::debug!(
                         target: "executor",
                         "destination address has length {} invalid for destination workchain {}",
                         addr_len, workchain
@@ -1085,7 +1085,7 @@ fn check_rewrite_dest_addr(
                 }
             }
         } else {
-            log::debug!(
+            tracing::debug!(
                 target: "executor",
                 "destination address contains unknown workchain_id {}",
                 workchain
@@ -1095,7 +1095,7 @@ fn check_rewrite_dest_addr(
     } else {
         if !cap_workchains && !acc_addr.is_masterchain() &&
             acc_addr.workchain as i32 != ShardIdent::BASECHAIN.workchain() {
-            log::debug!(
+            tracing::debug!(
                 target: "executor",
                 "masterchain cannot accept from {} workchain",
                 acc_addr.workchain
@@ -1103,7 +1103,7 @@ fn check_rewrite_dest_addr(
             return Err(IncorrectCheckRewrite::Other);
         }
         if addr_len != 256 {
-            log::debug!(
+            tracing::debug!(
                 target: "executor",
                 "destination address has length {} invalid for destination workchain {}",
                 addr_len, workchain
@@ -1113,7 +1113,7 @@ fn check_rewrite_dest_addr(
     }
 
     if anycast.is_some() {
-        log::debug!(target: "executor", "address cannot be anycast");
+        tracing::debug!(target: "executor", "address cannot be anycast");
         return Err(IncorrectCheckRewrite::Anycast);
     }
     /* anycast not supported
@@ -1171,7 +1171,7 @@ fn outmsg_action_handler(
         mode.contains(SendMsgFlags::WITH_REMAINING_BALANCE | SendMsgFlags::ALL_BALANCE) ||
         (mode.contains(SendMsgFlags::DELETE_IF_EMPTY) && !mode.contains(SendMsgFlags::ALL_BALANCE))
     {
-        log::error!(target: "executor", "outmsg mode has unsupported flags");
+        tracing::error!(target: "executor", "outmsg mode has unsupported flags");
         return Err(ActionError::Unsupported);
     }
     let skip = if mode.contains(SendMsgFlags::IGNORE_ERROR) {
@@ -1194,7 +1194,7 @@ fn outmsg_action_handler(
             OwnedMessage { info, init, body, layout }
         }
         Err(addr) => {
-            log::warn!(target: "executor", "Incorrect source address {:?}", addr);
+            tracing::warn!(target: "executor", "Incorrect source address {:?}", addr);
             return Err(ActionError::IncorrectSrcAddress);
         }
     };
@@ -1208,7 +1208,7 @@ fn outmsg_action_handler(
         storage_stats(&msg, false, MAX_MSG_CELLS).map_err(|e| e.into())
             .and_then(|a| config.calc_fwd_fee(is_masterchain, &a))
             .map_err(|err| {
-                log::error!(target: "executor", "cannot serialize message in action phase : {}", err);
+                tracing::error!(target: "executor", "cannot serialize message in action phase : {}", err);
                 ActionError::ActionListInvalid
             })?
     };
@@ -1216,11 +1216,11 @@ fn outmsg_action_handler(
         match check_rewrite_dest_addr(&int_header.dst, config, acc_addr) {
             Ok(new_dst) => { int_header.dst = new_dst }
             Err(IncorrectCheckRewrite::Anycast) => {
-                log::warn!(target: "executor", "Incorrect destination anycast address {}", int_header.dst);
+                tracing::warn!(target: "executor", "Incorrect destination anycast address {}", int_header.dst);
                 return skip.map_err(|_| ActionError::Anycast)
             }
             Err(IncorrectCheckRewrite::Other) => {
-                log::warn!(target: "executor", "Incorrect destination address {}", int_header.dst);
+                tracing::warn!(target: "executor", "Incorrect destination address {}", int_header.dst);
                 return skip.map_err(|_| ActionError::IncorrectDstAddress)
             }
         }
@@ -1262,7 +1262,7 @@ fn outmsg_action_handler(
                     return skip.map_err(|_| ActionError::NotEnoughTokens)
                 }
                 send_value.tokens = send_value.tokens.checked_sub(*compute_phase_fees).ok_or_else(|| {
-                    log::error!(target: "executor", "cannot subtract msg balance: integer underflow");
+                    tracing::error!(target: "executor", "cannot subtract msg balance: integer underflow");
                     ActionError::ActionListInvalid
                 })?;
             }
@@ -1273,7 +1273,7 @@ fn outmsg_action_handler(
             send_value.tokens += total_fwd_fees;
         } else if int_header.value.tokens < total_fwd_fees {
             //msg value is too small, reciever cannot pay the fees
-            log::warn!(
+            tracing::warn!(
                 target: "executor",
                 "msg balance {} is too small, cannot pay fwd+ihr fees: {}",
                 int_header.value.tokens, total_fwd_fees
@@ -1297,7 +1297,7 @@ fn outmsg_action_handler(
     if let Some(tokens) = acc_balance.tokens.checked_sub(send_value.tokens) {
         acc_balance.tokens = tokens;
     } else {
-        log::warn!(
+        tracing::warn!(
             target: "executor",
             "account balance {} is too small, cannot send {}", acc_balance.tokens, send_value.tokens
         );
@@ -1305,7 +1305,7 @@ fn outmsg_action_handler(
     };
 
     if let Err(_) | Ok(false) = acc_balance.other.try_sub_assign(&send_value.other) {
-        log::warn!(
+        tracing::warn!(
             target: "executor",
             "account balance {:?} is too small, cannot send {:?}", acc_balance.other, send_value.other
         );
@@ -1361,7 +1361,7 @@ fn outmsg_action_handler(
                 .map(|stats| (cell, stats))
         )
         .map_err(|err| {
-            log::error!(target: "executor", "cannot serialize message in action phase : {}", err);
+            tracing::error!(target: "executor", "cannot serialize message in action phase : {}", err);
             ActionError::ActionListInvalid
         })?;
     phase.total_message_size = StorageUsedShort {
@@ -1371,7 +1371,7 @@ fn outmsg_action_handler(
 
     if phase.total_message_size.bits.into_inner() as usize > MAX_MSG_BITS ||
         phase.total_message_size.cells.into_inner() as usize > MAX_MSG_CELLS {
-        log::warn!(target: "executor", "total messages too large: bits: {}, cells: {}",
+        tracing::warn!(target: "executor", "total messages too large: bits: {}, cells: {}",
             phase.total_message_size.bits, phase.total_message_size.cells);
         return Err(ActionError::ActionListInvalid);
     }
@@ -1380,7 +1380,7 @@ fn outmsg_action_handler(
         *msg_balance = CurrencyCollection::default();
     }
 
-    if log::log_enabled!(target: "executor", log::Level::Debug) {
+    if tracing::enabled!(target: "executor", tracing::Level::DEBUG) {
         let (src, dst) = match &msg.info {
             MsgInfo::Int(h) => (h.src.to_string(), h.dst.to_string()),
             MsgInfo::ExtIn(_) => ("None".to_string(), "None".to_string()),
@@ -1391,7 +1391,7 @@ fn outmsg_action_handler(
         } else {
             format!("{}", Fmt(&msg.body))
         };
-        log::debug!(target: "executor", "Message details:\n\tFlag: {}\n\tValue: {}\n\tSource: {}\n\tDestination: {}\n\tBody: {}\n\tStateInit: {}",
+        tracing::debug!(target: "executor", "Message details:\n\tFlag: {}\n\tValue: {}\n\tSource: {}\n\tDestination: {}\n\tBody: {}\n\tStateInit: {}",
             mode.bits(),
             balance_to_string(&send_value),
             src,
@@ -1416,7 +1416,7 @@ fn reserve_action_handler(
     if mode.intersects(!ReserveCurrencyFlags::all()) {
         return Err(ActionError::UnknownOrInvalidAction);
     }
-    log::debug!(target: "executor", "Reserve with mode = {} value = {}", mode.bits(), balance_to_string(val));
+    tracing::debug!(target: "executor", "Reserve with mode = {} value = {}", mode.bits(), balance_to_string(val));
 
     let mut reserved;
     if mode.contains(ReserveCurrencyFlags::WITH_ORIGINAL_BALANCE) {
@@ -1458,7 +1458,7 @@ fn reserve_action_handler(
 }
 
 fn setcode_action_handler(acc: &mut OptionalAccount, code: Cell) -> std::result::Result<(), ActionError> {
-    log::debug!(target: "executor", "OutAction::SetCode\nPrevious code hash: {}\nNew code hash:      {}",
+    tracing::debug!(target: "executor", "OutAction::SetCode\nPrevious code hash: {}\nNew code hash:      {}",
         &acc.0.as_ref()
             .map(|a| match &a.state { AccountState::Active( state ) => state.code.as_ref(), _ => None } )
             .flatten().map_or(*EMPTY_CELL_HASH, |code| *code.repr_hash()),
@@ -1507,7 +1507,7 @@ fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Dy
         match a {
             Ok(_) => { len += 1; },
             Err(err) => {
-                log::trace!(
+                tracing::trace!(
                     target: "executor",
                     "{} {} because libraries are broken {}",
                         text, msg.repr_hash(), err
@@ -1519,7 +1519,7 @@ fn check_libraries(init: &StateInit, disable_set_lib: bool, text: &str, msg: &Dy
     if !disable_set_lib || len == 0 {
         true
     } else {
-        log::trace!(
+        tracing::trace!(
             target: "executor",
             "{} {} because libraries are disabled",
                 text, msg.repr_hash()
@@ -1562,7 +1562,7 @@ fn account_from_message(
                 }
             }
             Some(_) => {
-                log::trace!(
+                tracing::trace!(
                     target: "executor",
                     "Cannot construct account from message with hash {} \
                         because the destination address does not math with hash message code",
@@ -1573,7 +1573,7 @@ fn account_from_message(
         }
     }
     if hdr.bounce {
-        log::trace!(
+        tracing::trace!(
             target: "executor",
             "Account will not be created. Value of {} message will be returned",
             msg.cell.repr_hash()

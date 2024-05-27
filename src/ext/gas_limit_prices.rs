@@ -72,7 +72,7 @@ impl GasLimitsPricesExt for GasLimitsPrices {
             // forbid division by zero and imprecise computation
             fail!("config error: gas_price must have at least 16 trailing zero bits")
         }
-        log::debug!(
+        tracing::debug!(
             target: "executor",
             "gas before: gm: {}, gl: {}, gc: {}, price: {}",
             gas_max, gas_limit, gas_credit, gas_price_nano

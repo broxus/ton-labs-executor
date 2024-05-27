@@ -63,7 +63,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                         }
                     _ => fail!("Account {} is not special account for tick tock", acc_addr)
                 }
-                log::debug!(target: "executor", "tick tock transaction account {}", acc_addr);
+                tracing::debug!(target: "executor", "tick tock transaction account {}", acc_addr);
                 (acc_addr.clone(), account.balance.clone())
             },
             None => fail!("Tick Tock transaction requires deployed account")
@@ -109,7 +109,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&acc_addr.address.0)))
             .push(boolean!(self.tt == TickTock::Tock))
             .push(int!(-2));
-        log::debug!(target: "executor", "compute_phase {}", time.tx_lt());
+        tracing::debug!(target: "executor", "compute_phase {}", time.tx_lt());
         let (actions, new_data);
         (description.compute_phase, actions, new_data) = Common::compute_phase(
             config,
@@ -125,7 +125,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             is_special,
             &params,
         ).map_err(|e| {
-            log::error!(target: "executor", "compute_phase error: {}", e);
+            tracing::error!(target: "executor", "compute_phase error: {}", e);
             match e.downcast_ref::<ExecutorError>() {
                 Some(ExecutorError::NoAcceptError(_, _)) => e,
                 _ => error!(ExecutorError::TrExecutorError(e.to_string()))
@@ -137,8 +137,8 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 tr.total_fees.tokens = tr.total_fees.tokens
                     .checked_add(phase.gas_fees).ok_or_else(|| error!("integer overflow"))?;
                 if phase.success {
-                    log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
-                    log::debug!(target: "executor", "action_phase {}", time.tx_lt());
+                    tracing::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
+                    tracing::debug!(target: "executor", "action_phase {}", time.tx_lt());
                     match Common::action_phase_with_copyleft(
                         config,
                         &mut tr.total_fees.tokens,
@@ -166,12 +166,12 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                         )
                     }
                 } else {
-                    log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
+                    tracing::debug!(target: "executor", "compute_phase: TrComputePhase::Vm failed");
                     (None, vec![])
                 }
             }
             ComputePhase::Skipped(ref skipped) => {
-                log::debug!(target: "executor",
+                tracing::debug!(target: "executor",
                     "compute_phase: skipped: reason {:?}", skipped.reason);
                 (None, vec![])
             }
@@ -186,17 +186,17 @@ impl TransactionExecutor for TickTockTransactionExecutor {
 
         description.aborted = match description.action_phase {
             Some(ref phase) => {
-                log::debug!(target: "executor",
+                tracing::debug!(target: "executor",
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code);
                 !phase.success
             }
             None => {
-                log::debug!(target: "executor", "action_phase: none");
+                tracing::debug!(target: "executor", "action_phase: none");
                 true
             }
         };
 
-        log::debug!(target: "executor", "Description.aborted {}", description.aborted);
+        tracing::debug!(target: "executor", "Description.aborted {}", description.aborted);
         account.0.as_mut().map(|a| a.balance = acc_balance);
         if description.aborted {
             *account = old_account;

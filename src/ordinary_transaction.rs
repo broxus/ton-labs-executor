@@ -96,7 +96,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             },
             MsgInfo::ExtOut(_) => fail!(ExecutorError::InvalidExtMessage)
         };
-        log::debug!(
+        tracing::debug!(
             target: "executor",
             "Ordinary transaction executing, in message id: {}",
             in_msg.cell.repr_hash()
@@ -109,8 +109,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             _ => fail!(ExecutorError::InvalidExtMessage)
         };
         match &account.0 {
-            Some(_) => log::debug!(target: "executor", "Account = {}", acc_addr),
-            None => log::debug!(target: "executor", "Account = None, address = {}", acc_addr),
+            Some(_) => tracing::debug!(target: "executor", "Account = {}", acc_addr),
+            None => tracing::debug!(target: "executor", "Account = None, address = {}", acc_addr),
         }
 
         let time = TxTime::new(&params, account, Some(&in_msg.data.info));
@@ -130,7 +130,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         let mut acc_balance = account.balance().clone();
 
-        log::debug!(target: "executor", "acc_balance: {}, msg_balance: {}, credit_first: {}",
+        tracing::debug!(target: "executor", "acc_balance: {}, msg_balance: {}, credit_first: {}",
             acc_balance.tokens, msg_balance.tokens, !bounce);
 
         let is_special = config.is_special_account(&acc_addr);
@@ -138,7 +138,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         // first check if contract can pay for importing external message
         if is_ext_msg && !is_special {
             let in_fwd_fee = config.calc_fwd_fee(acc_addr.is_masterchain(), &storage_stats(&in_msg.data, false, MAX_MSG_CELLS)?)?;
-            log::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee, acc_balance.tokens);
+            tracing::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee, acc_balance.tokens);
             acc_balance.tokens = acc_balance.tokens.checked_sub(in_fwd_fee).ok_or(ExecutorError::NoFundsToImportMsg)?;
             tr.total_fees.tokens = tr.total_fees.tokens.checked_add(in_fwd_fee).ok_or_else(|| error!("integer overflow"))?;
         }
@@ -173,7 +173,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             msg_balance.tokens = min(msg_balance.tokens, acc_balance.tokens);
         }
 
-        log::debug!(target: "executor",
+        tracing::debug!(target: "executor",
             "storage_phase: {}", if description.storage_phase.is_some() {"present"} else {"none"});
         // pre-compute phase balance, to be used in "reserve" out actions;
         // does not include msg balance from credit phase. may be initially empty.
@@ -196,7 +196,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 )
             };
         }
-        log::debug!(target: "executor",
+        tracing::debug!(target: "executor",
             "credit_phase: {}", if description.credit_phase.is_some() {"present"} else {"none"});
 
         #[cfg(feature = "timings")] {
@@ -220,7 +220,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     in_msg.data.body.clone()
                 })?))
             .push(boolean!(is_ext_msg));
-        log::debug!(target: "executor", "compute_phase");
+        tracing::debug!(target: "executor", "compute_phase");
         let (actions, new_data);
         (description.compute_phase, actions, new_data) = Common::compute_phase(
             config,
@@ -236,7 +236,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             is_special,
             &params,
         ).map_err(|e| {
-            log::error!(target: "executor", "compute_phase error: {}", e);
+            tracing::error!(target: "executor", "compute_phase error: {}", e);
             match e.downcast_ref::<ExecutorError>() {
                 Some(ExecutorError::NoAcceptError(_, _)) => e,
                 _ => error!(ExecutorError::TrExecutorError(e.to_string()))
@@ -251,8 +251,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 tr.total_fees.tokens = tr.total_fees.tokens.checked_add(compute_phase_gas_fees)
                     .ok_or_else(|| error!("integer overflow"))?;
                 if phase.success {
-                    log::debug!(target: "executor", "compute_phase: success");
-                    log::debug!(target: "executor", "action_phase: lt={}", time.tx_lt());
+                    tracing::debug!(target: "executor", "compute_phase: success");
+                    tracing::debug!(target: "executor", "action_phase: lt={}", time.tx_lt());
                     // since the balance is not used anywhere else if we have reached this point,
                     // then we can change it here
                     match Common::action_phase_with_copyleft(
@@ -283,13 +283,13 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                         )
                     }
                 } else {
-                    log::debug!(target: "executor", "compute_phase: failed");
+                    tracing::debug!(target: "executor", "compute_phase: failed");
                     (None, vec![])
                 }
             }
             ComputePhase::Skipped(skipped) => {
                 compute_phase_gas_fees = Tokens::ZERO;
-                log::debug!(target: "executor", "compute_phase: skipped reason {:?}", skipped.reason);
+                tracing::debug!(target: "executor", "compute_phase: skipped reason {:?}", skipped.reason);
                 if is_ext_msg {
                     fail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
                 }
@@ -311,7 +311,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
 
         description.aborted = match description.action_phase.as_ref() {
             Some(phase) => {
-                log::debug!(
+                tracing::debug!(
                     target: "executor",
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code
                 );
@@ -325,15 +325,15 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 !phase.success
             }
             None => {
-                log::debug!(target: "executor", "action_phase: none");
+                tracing::debug!(target: "executor", "action_phase: none");
                 true
             }
         };
 
-        log::debug!(target: "executor", "Description.aborted {}", description.aborted);
+        tracing::debug!(target: "executor", "Description.aborted {}", description.aborted);
         if description.aborted && !is_ext_msg && bounce {
             if description.action_phase.is_none() || config.global_version().capabilities.contains(GlobalCapability::CapBounceAfterFailedAction) {
-                log::debug!(target: "executor", "bounce_phase");
+                tracing::debug!(target: "executor", "bounce_phase");
                 let msg_index = description.action_phase.as_ref().map_or(0, |a| a.messages_created);
                 description.bounce_phase = match Common::bounce_phase(
                     config,
@@ -362,7 +362,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             // if money can be returned to sender
             // restore account balance - storage fee
             if let Some(BouncePhase::Executed(_)) = description.bounce_phase {
-                log::debug!(target: "executor", "restore balance {} => {}", acc_balance.tokens, original_acc_balance.tokens);
+                tracing::debug!(target: "executor", "restore balance {} => {}", acc_balance.tokens, original_acc_balance.tokens);
                 acc_balance = original_acc_balance;
             } else if account.0.is_none() && (acc_balance.tokens.is_zero() && acc_balance.other.is_zero()?) {
                 let mut acc = Account::uninit(acc_addr, &acc_balance)?;
@@ -373,9 +373,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if account.status() == AccountStatus::Uninit && acc_balance.tokens.is_zero() && acc_balance.other.is_zero()? {
             *account = OptionalAccount::EMPTY;
         }
-        log::debug!(target: "executor", "set balance {}", acc_balance.tokens);
+        tracing::debug!(target: "executor", "set balance {}", acc_balance.tokens);
         account.0.as_mut().map(|a| a.balance = acc_balance);
-        log::debug!(target: "executor", "add messages");
+        tracing::debug!(target: "executor", "add messages");
         account.0.as_mut().map(|a| a.last_trans_lt = time.non_aborted_account_lt(out_msgs.len()));
         tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
         for (msg_index, msg) in out_msgs.into_iter().enumerate() {

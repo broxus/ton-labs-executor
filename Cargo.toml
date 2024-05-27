@@ -8,7 +8,7 @@ everscale-vm = { git = "https://github.com/broxus/ton-labs-vm.git", package = "t
 everscale-types = { git = "https://github.com/broxus/everscale-types.git", features = ["stats"], branch = "feature/msgs-proc-logic" }
 
 # External
-anyhow = "1.0.42"
-log = "0.4.8"
-thiserror = "1.0.26"
-ahash = "0.8.3"
+ahash = "0.8"
+anyhow = "1.0.79"
+thiserror = "1.0"
+tracing = "0.1"
