@@ -85,6 +85,8 @@ impl Default for ExecuteParams {
     }
 }
 
+// Canary so trait is object safe
+const _: Option<&dyn TransactionExecutor> = None;
 pub trait TransactionExecutor {
     fn execute_with_params(
         &self,
@@ -124,12 +126,14 @@ pub trait TransactionExecutor {
         *account_root = new_account_cell;
         Ok(transaction)
     }
-
+}
+pub(crate) struct Common;
+impl Common {
     /// Implementation of transaction's storage phase.
     /// If account does not exist - phase skipped.
     /// Calculates storage fees and substracts them from account balance.
     /// If account balance becomes negative after that, then account is frozen.
-    fn storage_phase(
+    pub fn storage_phase(
         config: &PreloadedBlockchainConfig,
         acc_opt: &mut OptionalAccount,
         acc_balance: &mut CurrencyCollection,
@@ -218,7 +222,7 @@ pub trait TransactionExecutor {
     /// Increases account balance by the amount that appears in the internal message header.
     /// If account does not exist - phase skipped.
     /// If message is not internal - phase skipped.
-    fn credit_phase(
+    pub fn credit_phase(
         acc: &mut OptionalAccount,
         tr_total_fees_tokens: &mut Tokens,
         msg_balance: &mut CurrencyCollection,
@@ -255,7 +259,7 @@ pub trait TransactionExecutor {
 
     /// Implementation of transaction's computing phase.
     /// Evaluates new account state and invokes TVM if account has contract code.
-    fn compute_phase(
+    pub fn compute_phase(
         config: &PreloadedBlockchainConfig,
         is_ordinary: bool,
         msg: Option<&InputMessage>,
@@ -485,7 +489,7 @@ pub trait TransactionExecutor {
         Ok((result.phase, result.messages))
     }
 */
-    fn action_phase_with_copyleft(
+    pub fn action_phase_with_copyleft(
         config: &PreloadedBlockchainConfig,
         tr_total_fees_tokens: &mut Tokens,
         time: &TxTime,
@@ -681,7 +685,7 @@ pub trait TransactionExecutor {
     /// Generates outbound internal message for original message sender, with value equal
     /// to value of original message minus gas payments and forwarding fees
     /// and empty body. Generated message is added to transaction's output message list.
-    fn bounce_phase(
+    pub fn bounce_phase(
         config: &PreloadedBlockchainConfig,
         mut remaining_msg_balance: CurrencyCollection,
         acc_balance: &mut CurrencyCollection,

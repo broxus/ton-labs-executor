@@ -33,7 +33,7 @@ use crate::blockchain_config::{MAX_MSG_CELLS, PreloadedBlockchainConfig, VERSION
 use crate::error::ExecutorError;
 use crate::ext::account::AccountExt;
 use crate::ext::extra_currency_collection::ExtraCurrencyCollectionExt;
-use crate::transaction_executor::{ExecuteParams, TransactionExecutor};
+use crate::transaction_executor::{Common, ExecuteParams, TransactionExecutor};
 use crate::utils::{create_tx, default_tx_info, storage_stats, TxTime};
 
 pub struct OrdinaryTransactionExecutor {
@@ -144,7 +144,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         }
 
         if description.credit_first && !is_ext_msg {
-            description.credit_phase = match Self::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
+            description.credit_phase = match Common::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
                 Ok(credit_ph) => Some(credit_ph),
                 Err(e) => fail!(
                     ExecutorError::TrExecutorError(
@@ -155,7 +155,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         }
 
         let storage_fee;
-        (description.storage_phase, storage_fee) = Self::storage_phase(
+        (description.storage_phase, storage_fee) = Common::storage_phase(
             config,
             account,
             &mut acc_balance,
@@ -187,7 +187,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         };
 
         if !description.credit_first && !is_ext_msg {
-            description.credit_phase = match Self::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
+            description.credit_phase = match Common::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
                 Ok(credit_ph) => Some(credit_ph),
                 Err(e) => fail!(
                     ExecutorError::TrExecutorError(
@@ -222,7 +222,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             .push(boolean!(is_ext_msg));
         log::debug!(target: "executor", "compute_phase");
         let (actions, new_data);
-        (description.compute_phase, actions, new_data) = Self::compute_phase(
+        (description.compute_phase, actions, new_data) = Common::compute_phase(
             config,
             true,
             Some(&in_msg),
@@ -255,7 +255,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     log::debug!(target: "executor", "action_phase: lt={}", time.tx_lt());
                     // since the balance is not used anywhere else if we have reached this point,
                     // then we can change it here
-                    match Self::action_phase_with_copyleft(
+                    match Common::action_phase_with_copyleft(
                         config,
                         &mut tr.total_fees.tokens,
                         &time,
@@ -335,7 +335,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             if description.action_phase.is_none() || config.global_version().capabilities.contains(GlobalCapability::CapBounceAfterFailedAction) {
                 log::debug!(target: "executor", "bounce_phase");
                 let msg_index = description.action_phase.as_ref().map_or(0, |a| a.messages_created);
-                description.bounce_phase = match Self::bounce_phase(
+                description.bounce_phase = match Common::bounce_phase(
                     config,
                     msg_balance.clone(),
                     &mut acc_balance,

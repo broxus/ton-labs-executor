@@ -23,6 +23,7 @@ use everscale_vm::{error, fail, types::Result};
 
 use crate::{ActionPhaseResult, error::ExecutorError, ExecuteParams, TransactionExecutor};
 use crate::blockchain_config::PreloadedBlockchainConfig;
+use crate::transaction_executor::Common;
 use crate::utils::{create_tx, TxTime};
 
 pub struct TickTockTransactionExecutor {
@@ -72,7 +73,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let time = TxTime::new(&params, account, None);
         let mut tr = create_tx(acc_addr.address, account.status(), &time, None);
 
-        let (Some(storage_phase), storage_fee) = Self::storage_phase(
+        let (Some(storage_phase), storage_fee) = Common::storage_phase(
             config,
             account,
             &mut acc_balance,
@@ -110,7 +111,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             .push(int!(-2));
         log::debug!(target: "executor", "compute_phase {}", time.tx_lt());
         let (actions, new_data);
-        (description.compute_phase, actions, new_data) = Self::compute_phase(
+        (description.compute_phase, actions, new_data) = Common::compute_phase(
             config,
             false,
             None,
@@ -138,7 +139,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 if phase.success {
                     log::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     log::debug!(target: "executor", "action_phase {}", time.tx_lt());
-                    match Self::action_phase_with_copyleft(
+                    match Common::action_phase_with_copyleft(
                         config,
                         &mut tr.total_fees.tokens,
                         &time,
