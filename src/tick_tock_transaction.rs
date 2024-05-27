@@ -196,7 +196,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             }
         };
 
-        log::debug!(target: "executor", "Desciption.aborted {}", description.aborted);
+        log::debug!(target: "executor", "Description.aborted {}", description.aborted);
         account.0.as_mut().map(|a| a.balance = acc_balance);
         if description.aborted {
             *account = old_account;

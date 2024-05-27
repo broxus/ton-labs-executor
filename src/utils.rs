@@ -41,13 +41,13 @@ impl TxTime {
         incoming_msg_info: Option<&MsgInfo>,
     ) -> Self {
         let msg_lt = match incoming_msg_info {
-            Some(MsgInfo::Int(h)) => h.created_lt,
-            Some(MsgInfo::ExtOut(h)) => h.created_lt,
+            Some(MsgInfo::Int(h)) => h.created_lt + 1,
+            Some(MsgInfo::ExtOut(h)) => h.created_lt + 1,
             _ => 0,
         };
         let tx_lt = std::cmp::max(
-            account.0.as_ref().map_or(0, |a| a.last_trans_lt),
-            std::cmp::max(params.last_tr_lt.load(Ordering::Relaxed), msg_lt + 1),
+            account.last_trans_lt(),
+            std::cmp::max(params.last_tr_lt.load(Ordering::Relaxed), msg_lt),
         );
         Self {
             now: params.block_unixtime,
