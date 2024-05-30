@@ -27,6 +27,7 @@ pub struct InputMessage<'a> {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(i32)]
 enum ActionError {
     ActionListInvalid = 32,
     TooManyActions = 33,
@@ -512,7 +513,7 @@ impl Common {
             if err_code == ActionError::Unsupported {
                 err_code = ActionError::UnknownOrInvalidAction;
             }
-            tracing::debug!(target: "executor", "action failed: error_code={:?}", err_code);
+            tracing::debug!(target: "executor", "action failed: error_code={}", err_code as i32);
             phase.valid = true;
             phase.result_code = err_code as i32;
             if action_index != 0 {
@@ -577,8 +578,10 @@ impl Common {
                         acc_addr,
                         &total_reserved_value,
                         &mut account_deleted
-                    ).map(|out_msg| out_msg.map(|a| out_msgs_temp.push(EitherMsg::Ready(a))))
-                        .err()
+                    ).map(|out_msg| out_msg.map(|a| {
+                        phase.messages_created += 1;
+                        out_msgs_temp.push(EitherMsg::Ready(a))
+                    })).err()
                 }
                 OutAction::ReserveCurrency { mode, value } => {
                     reserve_action_handler(mode, &value, original_acc_balance, &mut acc_remaining_balance)
@@ -634,8 +637,10 @@ impl Common {
                         acc_addr,
                         &total_reserved_value,
                         &mut account_deleted,
-                    ).map(|out_msg| out_msg.map(|a| out_msgs.push(a)))
-                        .err();
+                    ).map(|out_msg| out_msg.map(|a| {
+                        phase.messages_created += 1;
+                        out_msgs.push(a)
+                    })).err();
                     tracing::debug!(target: "executor", "Final balance:   {}", balance_to_string(&acc_remaining_balance));
                     if let Some(err_code) = err_code {
                         process_err_code(err_code, action_index, &mut phase);
@@ -673,7 +678,6 @@ impl Common {
         }
         phase.valid = true;
         phase.success = true;
-        phase.messages_created = out_msgs.len() as u16;
         *acc_balance = acc_remaining_balance;
         *acc = acc_copy;
         Ok(ActionPhaseResult { phase, messages: out_msgs, copyleft_reward })
