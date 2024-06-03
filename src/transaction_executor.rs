@@ -6,7 +6,7 @@ use everscale_types::cell::{CellBuilder, CellTreeStats, DynCell, EMPTY_CELL_HASH
 use everscale_types::dict::Dict;
 use everscale_types::models::{Account, AccountState, AccountStatusChange, ActionPhase, BaseMessage, BouncePhase, ChangeLibraryMode, ComputePhase, ComputePhaseSkipReason, CreditPhase, CurrencyCollection, ExecutedBouncePhase, ExtOutMsgInfo, ExtraCurrencyCollection, GlobalCapability, HashUpdate, IntAddr, IntMsgInfo, Lazy, LibDescr, LibRef, MsgInfo, NoFundsBouncePhase, OptionalAccount, OutAction, OutActionsRevIter, OwnedMessage, OwnedRelaxedMessage, RelaxedExtOutMsgInfo, RelaxedIntMsgInfo, RelaxedMsgInfo, ReserveCurrencyFlags, SendMsgFlags, ShardIdent, SimpleLib, SkippedComputePhase, StateInit, StdAddr, StorageInfo, StoragePhase, StorageUsedShort, Transaction, VarAddr, WorkchainFormat, WorkchainFormatExtended};
 use everscale_types::num::{Tokens, Uint9, VarUint56};
-use everscale_types::prelude::{Cell, CellFamily, CellSliceRange, ExactSize, HashBytes, Load};
+use everscale_types::prelude::{Cell, CellFamily, CellSliceRange, ExactSize, HashBytes};
 use everscale_vm::{Fmt, OwnedCellSlice};
 use everscale_vm::{error, fail, types::{ExceptionCode, Result}};
 use everscale_vm::error::tvm_exception;
@@ -99,12 +99,12 @@ pub trait TransactionExecutor {
     fn execute_with_libs_and_params(
         &self,
         in_msg: Option<&Cell>,
-        account_root: &mut Cell,
+        account_root: &mut Lazy<OptionalAccount>,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction> {
-        let old_hash = account_root.repr_hash().clone();
-        let mut account = OptionalAccount::load_from(account_root.as_slice()?.as_mut())?;
+        let old_hash = account_root.inner().repr_hash();
+        let mut account = account_root.load()?;
         let mut transaction = self.execute_with_params(
             in_msg,
             &mut account,
@@ -118,13 +118,13 @@ pub trait TransactionExecutor {
                 account.update_storage_stat()?;
             }
         }
-        let new_account_cell = CellBuilder::build_from(&account)?;
-        let new_hash = new_account_cell.repr_hash();
-        transaction.state_update = Lazy::new(&HashUpdate { old: old_hash, new: *new_hash })?;
+        let new_account_root = Lazy::new(&account)?;
+        let new_hash = new_account_root.inner().repr_hash();
+        transaction.state_update = Lazy::new(&HashUpdate { old: *old_hash, new: *new_hash })?;
         transaction.end_status = account.status();
         // outputs below: no errors possible
         params.last_tr_lt.store(transaction.lt, Ordering::Relaxed);
-        *account_root = new_account_cell;
+        *account_root = new_account_root;
         Ok(transaction)
     }
 }
