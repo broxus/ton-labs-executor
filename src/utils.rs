@@ -40,9 +40,10 @@ impl TxTime {
         incoming_msg_info: Option<&MsgInfo>,
     ) -> Self {
         let msg_lt = match incoming_msg_info {
+            None => 0,
+            Some(MsgInfo::ExtIn(_)) => 1,
             Some(MsgInfo::Int(h)) => h.created_lt + 1,
             Some(MsgInfo::ExtOut(h)) => h.created_lt + 1,
-            _ => 0,
         };
         let tx_lt = std::cmp::max(
             account.last_trans_lt(),
