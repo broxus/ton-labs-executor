@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use everscale_types::cell::{CellBuilder, CellTreeStats, DynCell, EMPTY_CELL_HASH, MAX_BIT_LEN, MAX_REF_COUNT};
 use everscale_types::dict::Dict;
-use everscale_types::models::{Account, AccountState, AccountStatusChange, ActionPhase, BaseMessage, BouncePhase, ChangeLibraryMode, ComputePhase, ComputePhaseSkipReason, CreditPhase, CurrencyCollection, ExecutedBouncePhase, ExtOutMsgInfo, ExtraCurrencyCollection, GlobalCapability, HashUpdate, IntAddr, IntMsgInfo, Lazy, LibDescr, LibRef, MsgInfo, NoFundsBouncePhase, OptionalAccount, OutAction, OutActionsRevIter, OwnedMessage, OwnedRelaxedMessage, RelaxedExtOutMsgInfo, RelaxedIntMsgInfo, RelaxedMsgInfo, ReserveCurrencyFlags, SendMsgFlags, ShardIdent, SimpleLib, SkippedComputePhase, StateInit, StdAddr, StorageInfo, StoragePhase, StorageUsedShort, Transaction, VarAddr, WorkchainFormat, WorkchainFormatExtended};
+use everscale_types::models::{Account, AccountState, AccountStatusChange, ActionPhase, BaseMessage, BouncePhase, ChangeLibraryMode, ComputePhase, ComputePhaseSkipReason, CreditPhase, CurrencyCollection, ExecutedBouncePhase, ExtOutMsgInfo, ExtraCurrencyCollection, GlobalCapability, HashUpdate, IntAddr, IntMsgInfo, Lazy, LibDescr, LibRef, MsgInfo, NoFundsBouncePhase, OptionalAccount, OutAction, OutActionsRevIter, OwnedMessage, OwnedRelaxedMessage, RelaxedExtOutMsgInfo, RelaxedIntMsgInfo, RelaxedMsgInfo, ReserveCurrencyFlags, SendMsgFlags, ShardAccount, ShardIdent, SimpleLib, SkippedComputePhase, StateInit, StdAddr, StorageInfo, StoragePhase, StorageUsedShort, Transaction, VarAddr, WorkchainFormat, WorkchainFormatExtended};
 use everscale_types::num::{Tokens, Uint9, VarUint56};
 use everscale_types::prelude::{Cell, CellFamily, CellSliceRange, ExactSize, HashBytes};
 use everscale_vm::{Fmt, OwnedCellSlice};
@@ -98,12 +98,12 @@ pub trait TransactionExecutor {
     fn execute_with_libs_and_params(
         &self,
         in_msg: Option<&Cell>,
-        account_root: &mut Lazy<OptionalAccount>,
+        shard_account: &mut ShardAccount,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
-    ) -> Result<Transaction> {
-        let old_hash = account_root.inner().repr_hash();
-        let mut account = account_root.load()?;
+    ) -> Result<(Transaction, Lazy<Transaction>)> {
+        let old_hash = *shard_account.account.inner().repr_hash();
+        let mut account = shard_account.account.load()?;
         let mut transaction = self.execute_with_params(
             in_msg,
             &mut account,
@@ -118,12 +118,17 @@ pub trait TransactionExecutor {
             }
         }
         let new_account_root = Lazy::new(&account)?;
-        let new_hash = new_account_root.inner().repr_hash();
-        transaction.state_update = Lazy::new(&HashUpdate { old: *old_hash, new: *new_hash })?;
+        let new_hash = *new_account_root.inner().repr_hash();
+        transaction.state_update = Lazy::new(&HashUpdate { old: old_hash, new: new_hash })?;
         transaction.end_status = account.status();
+        transaction.prev_trans_lt = shard_account.last_trans_lt;
+        transaction.prev_trans_hash = shard_account.last_trans_hash;
+        let lazy_tx = Lazy::new(&transaction)?;
         // outputs below: no errors possible
-        *account_root = new_account_root;
-        Ok(transaction)
+        shard_account.account = new_account_root;
+        shard_account.last_trans_lt = transaction.lt;
+        shard_account.last_trans_hash = *lazy_tx.inner().repr_hash();
+        Ok((transaction, lazy_tx))
     }
 }
 pub(crate) struct Common;
