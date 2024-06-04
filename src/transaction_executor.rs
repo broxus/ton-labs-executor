@@ -1,6 +1,5 @@
 use std::cmp::min;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use everscale_types::cell::{CellBuilder, CellTreeStats, DynCell, EMPTY_CELL_HASH, MAX_BIT_LEN, MAX_REF_COUNT};
 use everscale_types::dict::Dict;
@@ -62,7 +61,7 @@ pub struct ExecuteParams {
     /// block's start logical time, `block.logicaltime` in tsol
     pub block_lt: u64,
     /// last used lt, to be replaced with lt of newly created tx
-    pub last_tr_lt: Arc<AtomicU64>,
+    pub last_tr_lt: u64,
     pub seed_block: HashBytes,
     pub debug: bool,
     pub trace_callback: Option<Arc<everscale_vm::executor::TraceCallback>>,
@@ -76,7 +75,7 @@ impl Default for ExecuteParams {
             state_libs: Dict::new(),
             block_unixtime: 0,
             block_lt: 0,
-            last_tr_lt: Arc::new(AtomicU64::new(0)),
+            last_tr_lt: 0,
             seed_block: HashBytes::default(),
             debug: false,
             trace_callback: None,
@@ -123,7 +122,6 @@ pub trait TransactionExecutor {
         transaction.state_update = Lazy::new(&HashUpdate { old: *old_hash, new: *new_hash })?;
         transaction.end_status = account.status();
         // outputs below: no errors possible
-        params.last_tr_lt.store(transaction.lt, Ordering::Relaxed);
         *account_root = new_account_root;
         Ok(transaction)
     }

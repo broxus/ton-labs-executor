@@ -1,5 +1,4 @@
 use std::result::Result as StdResult;
-use std::sync::atomic::Ordering;
 
 use everscale_types::cell::{Cell, CellFamily, CellTreeStats};
 use everscale_types::error as types;
@@ -47,7 +46,7 @@ impl TxTime {
         };
         let tx_lt = std::cmp::max(
             account.last_trans_lt(),
-            std::cmp::max(params.last_tr_lt.load(Ordering::Relaxed), msg_lt),
+            std::cmp::max(params.last_tr_lt, msg_lt),
         );
         Self {
             now: params.block_unixtime,
