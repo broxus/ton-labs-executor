@@ -60,8 +60,12 @@ pub struct ExecuteParams {
     pub block_unixtime: u32,
     /// block's start logical time, `block.logicaltime` in tsol
     pub block_lt: u64,
-    /// last used lt, to be replaced with lt of newly created tx
-    pub last_tr_lt: u64,
+    /// as during one block creation all accounts were processed in stages
+    /// (ticks and other specials, prev internal msgss, ext in msgs, new internal msgs, tocks),
+    /// this was the `max_lt + 1` inherited from the end of the previous group
+    /// (while max_lt keeps increasing with every tx no matter of stages);
+    /// account and transaction.lt will not be less than this value
+    pub min_lt: u64,
     pub seed_block: HashBytes,
     pub debug: bool,
     pub trace_callback: Option<Arc<everscale_vm::executor::TraceCallback>>,
@@ -75,7 +79,7 @@ impl Default for ExecuteParams {
             state_libs: Dict::new(),
             block_unixtime: 0,
             block_lt: 0,
-            last_tr_lt: 0,
+            min_lt: 0,
             seed_block: HashBytes::default(),
             debug: false,
             trace_callback: None,
@@ -92,6 +96,9 @@ pub trait TransactionExecutor {
         &self,
         in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
+        // no matter if previous transaction was successful or any of its phases failed,
+        // this is the value of the last known transaction.lt, processed over account
+        last_trans_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction>;
@@ -101,16 +108,19 @@ pub trait TransactionExecutor {
         shard_account: &mut ShardAccount,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
-    ) -> Result<(Transaction, Lazy<Transaction>)> {
+    ) -> Result<(CurrencyCollection, Lazy<Transaction>)> {
         let old_hash = *shard_account.account.inner().repr_hash();
         let mut account = shard_account.account.load()?;
+
         let mut transaction = self.execute_with_params(
             in_msg,
             &mut account,
+            shard_account.last_trans_lt,
             params,
             config,
         )?;
-        if let Some(ref mut account) = account.0 {
+
+        if let Some(account) = account.as_mut() {
             if config.global_version().capabilities.contains(GlobalCapability::CapFastStorageStat) {
                 account.update_storage_stat_fast()?;
             } else {
@@ -119,16 +129,18 @@ pub trait TransactionExecutor {
         }
         let new_account_root = Lazy::new(&account)?;
         let new_hash = *new_account_root.inner().repr_hash();
+
         transaction.state_update = Lazy::new(&HashUpdate { old: old_hash, new: new_hash })?;
         transaction.end_status = account.status();
         transaction.prev_trans_lt = shard_account.last_trans_lt;
         transaction.prev_trans_hash = shard_account.last_trans_hash;
         let lazy_tx = Lazy::new(&transaction)?;
+
         // outputs below: no errors possible
         shard_account.account = new_account_root;
         shard_account.last_trans_lt = transaction.lt;
         shard_account.last_trans_hash = *lazy_tx.inner().repr_hash();
-        Ok((transaction, lazy_tx))
+        Ok((transaction.total_fees, lazy_tx))
     }
 }
 pub(crate) struct Common;

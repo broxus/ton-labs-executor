@@ -45,6 +45,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         &self,
         in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
+        last_trans_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction> {
@@ -70,7 +71,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         };
 
         let is_special = true;
-        let time = TxTime::new(&params, account, None);
+        let time = TxTime::new(&params, account, last_trans_lt, None);
         let mut tr = create_tx(acc_addr.address, account.status(), &time, None);
 
         let (Some(storage_phase), storage_fee) = Common::storage_phase(

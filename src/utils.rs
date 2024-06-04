@@ -37,17 +37,18 @@ impl TxTime {
     pub fn new(
         params: &ExecuteParams,
         account: &OptionalAccount,
+        last_trans_lt: u64,
         incoming_msg_info: Option<&MsgInfo>,
     ) -> Self {
-        let msg_lt = match incoming_msg_info {
+        let after_msg_lt = match incoming_msg_info {
             None => 0,
             Some(MsgInfo::ExtIn(_)) => 1,
             Some(MsgInfo::Int(h)) => h.created_lt + 1,
             Some(MsgInfo::ExtOut(h)) => h.created_lt + 1,
         };
         let tx_lt = std::cmp::max(
-            account.last_trans_lt(),
-            std::cmp::max(params.last_tr_lt, msg_lt),
+            std::cmp::max(account.last_trans_lt(), after_msg_lt),
+            std::cmp::max(params.min_lt, last_trans_lt + 1),
         );
         Self {
             now: params.block_unixtime,
