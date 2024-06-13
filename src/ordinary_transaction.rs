@@ -62,7 +62,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         &self,
         in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
-        last_trans_lt: u64,
+        min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction> {
@@ -114,7 +114,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             None => tracing::debug!(target: "executor", "Account = None, address = {}", acc_addr),
         }
 
-        let time = TxTime::new(&params, account, last_trans_lt, Some(&in_msg.data.info));
+        let time = TxTime::new(&params, account, min_lt, Some(&in_msg.data.info));
         let mut tr = create_tx(acc_addr.address, account.status(), &time, Some(in_msg.cell));
 
         let mut description = default_tx_info(bounce);

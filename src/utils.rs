@@ -37,7 +37,7 @@ impl TxTime {
     pub fn new(
         params: &ExecuteParams,
         account: &OptionalAccount,
-        last_trans_lt: u64,
+        min_lt: u64,
         incoming_msg_info: Option<&MsgInfo>,
     ) -> Self {
         let after_msg_lt = match incoming_msg_info {
@@ -48,7 +48,7 @@ impl TxTime {
         };
         let tx_lt = std::cmp::max(
             std::cmp::max(account.last_trans_lt(), after_msg_lt),
-            std::cmp::max(params.min_lt, last_trans_lt + 1),
+            min_lt
         );
         Self {
             now: params.block_unixtime,

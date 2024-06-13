@@ -60,12 +60,6 @@ pub struct ExecuteParams {
     pub block_unixtime: u32,
     /// block's start logical time, `block.logicaltime` in tsol
     pub block_lt: u64,
-    /// as during one block creation all accounts were processed in stages
-    /// (ticks and other specials, prev internal msgss, ext in msgs, new internal msgs, tocks),
-    /// this was the `max_lt + 1` inherited from the end of the previous group
-    /// (while max_lt keeps increasing with every tx no matter of stages);
-    /// account and transaction.lt will not be less than this value
-    pub min_lt: u64,
     pub seed_block: HashBytes,
     pub debug: bool,
     pub trace_callback: Option<Arc<everscale_vm::executor::TraceCallback>>,
@@ -79,7 +73,6 @@ impl Default for ExecuteParams {
             state_libs: Dict::new(),
             block_unixtime: 0,
             block_lt: 0,
-            min_lt: 0,
             seed_block: HashBytes::default(),
             debug: false,
             trace_callback: None,
@@ -96,9 +89,8 @@ pub trait TransactionExecutor {
         &self,
         in_msg: Option<&Cell>,
         account: &mut OptionalAccount,
-        // no matter if previous transaction was successful or any of its phases failed,
-        // this is the value of the last known transaction.lt, processed over account
-        last_trans_lt: u64,
+        // account and transaction lt will not be less than this value
+        min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<Transaction>;
@@ -106,6 +98,11 @@ pub trait TransactionExecutor {
         &self,
         in_msg: Option<&Cell>,
         shard_account: &mut ShardAccount,
+        // account and transaction lt will not be less than min_lt;
+        // this is supposed to be the `max_lt + 1` inherited from the end of the previous
+        // (vm) execution group (every block creation consists of several groups,
+        // and max_lt increases with every tx no matter of group)
+        min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
     ) -> Result<(CurrencyCollection, Lazy<Transaction>)> {
@@ -115,7 +112,9 @@ pub trait TransactionExecutor {
         let mut transaction = self.execute_with_params(
             in_msg,
             &mut account,
-            shard_account.last_trans_lt,
+            // no matter if previous transaction was successful or any of its phases failed,
+            // shard_account.last_trans_lt is the last known transaction lt, processed over account
+            std::cmp::max(min_lt, shard_account.last_trans_lt + 1),
             params,
             config,
         )?;
