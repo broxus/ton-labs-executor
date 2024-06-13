@@ -21,9 +21,9 @@ use everscale_vm::{
 };
 use everscale_vm::{error, fail, types::Result};
 
-use crate::{ActionPhaseResult, error::ExecutorError, ExecuteParams, TransactionExecutor};
+use crate::{error::ExecutorError, ExecuteParams, TransactionExecutor};
 use crate::blockchain_config::PreloadedBlockchainConfig;
-use crate::transaction_executor::Common;
+use crate::transaction_executor::{ActionPhaseResult, Common};
 use crate::utils::{create_tx, TxTime};
 
 pub struct TickTockTransactionExecutor {

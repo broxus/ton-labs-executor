@@ -4,7 +4,7 @@ use std::sync::Arc;
 use everscale_types::cell::{CellBuilder, CellTreeStats, DynCell, EMPTY_CELL_HASH, MAX_BIT_LEN, MAX_REF_COUNT};
 use everscale_types::dict::Dict;
 use everscale_types::models::{Account, AccountState, AccountStatusChange, ActionPhase, BaseMessage, BouncePhase, ChangeLibraryMode, ComputePhase, ComputePhaseSkipReason, CreditPhase, CurrencyCollection, ExecutedBouncePhase, ExtOutMsgInfo, ExtraCurrencyCollection, GlobalCapability, HashUpdate, IntAddr, IntMsgInfo, Lazy, LibDescr, LibRef, MsgInfo, NoFundsBouncePhase, OptionalAccount, OutAction, OutActionsRevIter, OwnedMessage, OwnedRelaxedMessage, RelaxedExtOutMsgInfo, RelaxedIntMsgInfo, RelaxedMsgInfo, ReserveCurrencyFlags, SendMsgFlags, ShardAccount, ShardIdent, SimpleLib, SkippedComputePhase, StateInit, StdAddr, StorageInfo, StoragePhase, StorageUsedShort, Transaction, VarAddr, WorkchainFormat, WorkchainFormatExtended};
-use everscale_types::num::{Tokens, Uint9, VarUint56};
+use everscale_types::num::{Tokens, Uint15, Uint9, VarUint56};
 use everscale_types::prelude::{Cell, CellFamily, CellSliceRange, ExactSize, HashBytes};
 use everscale_vm::{Fmt, OwnedCellSlice};
 use everscale_vm::{error, fail, types::{ExceptionCode, Result}};
@@ -82,6 +82,12 @@ impl Default for ExecuteParams {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ExecutorOutput {
+    pub out_msgs: Dict<Uint15, Cell>,
+    pub transaction: Lazy<Transaction>,
+}
+
 // Canary so trait is object safe
 const _: Option<&dyn TransactionExecutor> = None;
 pub trait TransactionExecutor {
@@ -105,7 +111,7 @@ pub trait TransactionExecutor {
         min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
-    ) -> Result<(CurrencyCollection, Lazy<Transaction>)> {
+    ) -> Result<(CurrencyCollection, ExecutorOutput)> {
         let old_hash = *shard_account.account.inner().repr_hash();
         let mut account = shard_account.account.load()?;
 
@@ -139,7 +145,11 @@ pub trait TransactionExecutor {
         shard_account.account = new_account_root;
         shard_account.last_trans_lt = transaction.lt;
         shard_account.last_trans_hash = *lazy_tx.inner().repr_hash();
-        Ok((transaction.total_fees, lazy_tx))
+        let output = ExecutorOutput {
+            out_msgs: transaction.out_msgs,
+            transaction: lazy_tx,
+        };
+        Ok((transaction.total_fees, output))
     }
 }
 pub(crate) struct Common;

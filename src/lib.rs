@@ -11,19 +11,20 @@
 * limitations under the License.
 */
 
-pub mod transaction_executor;
-pub use transaction_executor::*;
+mod transaction_executor;
+pub use transaction_executor::{ExecuteParams, ExecutorOutput, TransactionExecutor};
 
-pub mod ordinary_transaction;
+mod ordinary_transaction;
 pub use ordinary_transaction::OrdinaryTransactionExecutor;
 
-pub mod tick_tock_transaction;
+mod tick_tock_transaction;
 pub use tick_tock_transaction::TickTockTransactionExecutor;
 
 #[macro_use]
-pub mod error;
+mod error;
 
-pub mod blockchain_config;
+mod blockchain_config;
+pub use blockchain_config::PreloadedBlockchainConfig;
 
 pub(crate) mod utils;
 pub(crate) mod ext;
