@@ -18,6 +18,7 @@ use crate::error::ExecutorError;
 use crate::ext::account::AccountExt;
 use crate::ext::extra_currency_collection::ExtraCurrencyCollectionExt;
 use crate::ext::gas_limit_prices::GasLimitsPricesExt;
+use crate::ext::transaction_ext::TransactionExt;
 use crate::utils::{CopyleftReward, default_action_phase, default_vm_phase, storage_stats, TxTime};
 
 pub struct InputMessage<'a> {
@@ -86,6 +87,7 @@ impl Default for ExecuteParams {
 pub struct ExecutorOutput {
     pub out_msgs: Dict<Uint15, Cell>,
     pub transaction: Lazy<Transaction>,
+    pub account_last_trans_lt: u64,
 }
 
 // Canary so trait is object safe
@@ -146,6 +148,7 @@ pub trait TransactionExecutor {
         shard_account.last_trans_lt = transaction.lt;
         shard_account.last_trans_hash = *lazy_tx.inner().repr_hash();
         let output = ExecutorOutput {
+            account_last_trans_lt: transaction.account_lt(),
             out_msgs: transaction.out_msgs,
             transaction: lazy_tx,
         };

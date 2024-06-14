@@ -74,9 +74,6 @@ impl TxTime {
             MsgInfo::ExtIn(_) => {}
         };
     }
-    pub fn non_aborted_account_lt(&self, msgs_count: usize) -> u64 {
-        self.tx_lt + 1 + msgs_count as u64
-    }
 }
 
 pub fn create_tx(

@@ -23,6 +23,7 @@ use everscale_vm::{error, fail, types::Result};
 
 use crate::{error::ExecutorError, ExecuteParams, TransactionExecutor};
 use crate::blockchain_config::PreloadedBlockchainConfig;
+use crate::ext::transaction_ext::TransactionExt;
 use crate::transaction_executor::{ActionPhaseResult, Common};
 use crate::utils::{create_tx, TxTime};
 
@@ -202,11 +203,11 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         if description.aborted {
             *account = old_account;
         }
-        account.0.as_mut().map(|a| a.last_trans_lt = time.non_aborted_account_lt(out_msgs.len()));
         tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
         for (msg_index, msg) in out_msgs.into_iter().enumerate() {
             tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
         }
+        account.0.as_mut().map(|a| a.last_trans_lt = tr.account_lt());
         tr.info = Lazy::new(&TxInfo::TickTock(description))?;
         Ok(tr)
     }

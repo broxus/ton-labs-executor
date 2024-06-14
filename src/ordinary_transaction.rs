@@ -32,6 +32,7 @@ use crate::blockchain_config::{MAX_MSG_CELLS, PreloadedBlockchainConfig, VERSION
 use crate::error::ExecutorError;
 use crate::ext::account::AccountExt;
 use crate::ext::extra_currency_collection::ExtraCurrencyCollectionExt;
+use crate::ext::transaction_ext::TransactionExt;
 use crate::transaction_executor::{ActionPhaseResult, Common, ExecuteParams, InputMessage, TransactionExecutor};
 use crate::utils::{create_tx, default_tx_info, storage_stats, TxTime};
 
@@ -376,11 +377,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         tracing::debug!(target: "executor", "set balance {}", acc_balance.tokens);
         account.0.as_mut().map(|a| a.balance = acc_balance);
         tracing::debug!(target: "executor", "add messages");
-        account.0.as_mut().map(|a| a.last_trans_lt = time.non_aborted_account_lt(out_msgs.len()));
         tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
         for (msg_index, msg) in out_msgs.into_iter().enumerate() {
             tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
         }
+        account.0.as_mut().map(|a| a.last_trans_lt = tr.account_lt());
         tr.info = Lazy::from_raw(CellBuilder::build_from(TxInfo::Ordinary(description))?);
         #[cfg(feature="timings")]
         self.timings[2].fetch_add(now.elapsed().as_micros() as u64, Ordering::SeqCst);
