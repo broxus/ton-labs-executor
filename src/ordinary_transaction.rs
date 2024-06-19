@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 use anyhow::Context;
 
-use everscale_types::cell::{Cell, CellBuilder, CellSliceRange};
+use everscale_types::cell::{Cell, CellSliceRange};
 use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, IntAddr, Lazy, MsgInfo, OptionalAccount, OwnedMessage, Transaction, TxInfo};
 use everscale_types::num::{Tokens, Uint15};
 use everscale_types::prelude::{CellFamily, Load};
@@ -65,7 +65,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
-    ) -> Result<Transaction> {
+    ) -> Result<(Transaction, u64)> {
         #[cfg(feature = "timings")]
             let mut now = Instant::now();
 
@@ -124,7 +124,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             description.aborted = true;
             account.0.as_mut().map(|a| a.last_trans_lt = time.tx_lt());
             tr.info = Lazy::new(&TxInfo::Ordinary(description))?;
-            return Ok(tr);
+            return Ok((tr, 0));
         }
 
         // end of validation
@@ -382,10 +382,14 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
         }
         account.0.as_mut().map(|a| a.last_trans_lt = tr.account_lt());
-        tr.info = Lazy::from_raw(CellBuilder::build_from(TxInfo::Ordinary(description))?);
+        let gas_used = match &description.compute_phase {
+            ComputePhase::Skipped(_) => 0,
+            ComputePhase::Executed(compute) => compute.gas_used.into_inner(),
+        };
+        tr.info = Lazy::new(&TxInfo::Ordinary(description))?;
         #[cfg(feature="timings")]
         self.timings[2].fetch_add(now.elapsed().as_micros() as u64, Ordering::SeqCst);
         // tr.set_copyleft_reward(copyleft);
-        Ok(tr)
+        Ok((tr, gas_used))
     }
 }

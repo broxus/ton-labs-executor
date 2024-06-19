@@ -49,7 +49,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
-    ) -> Result<Transaction> {
+    ) -> Result<(Transaction, u64)> {
         if in_msg.is_some() {
             fail!("Tick Tock transaction must not have input message")
         }
@@ -208,7 +208,11 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
         }
         account.0.as_mut().map(|a| a.last_trans_lt = tr.account_lt());
+        let gas_used = match &description.compute_phase {
+            ComputePhase::Skipped(_) => 0,
+            ComputePhase::Executed(compute) => compute.gas_used.into_inner(),
+        };
         tr.info = Lazy::new(&TxInfo::TickTock(description))?;
-        Ok(tr)
+        Ok((tr, gas_used))
     }
 }

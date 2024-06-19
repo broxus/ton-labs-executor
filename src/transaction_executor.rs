@@ -87,6 +87,7 @@ impl Default for ExecuteParams {
 pub struct ExecutorOutput {
     pub out_msgs: Dict<Uint15, Cell>,
     pub transaction: Lazy<Transaction>,
+    pub gas_used: u64,
     pub account_last_trans_lt: u64,
 }
 
@@ -101,7 +102,7 @@ pub trait TransactionExecutor {
         min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
-    ) -> Result<Transaction>;
+    ) -> Result<(Transaction, u64)>;
     fn execute_with_libs_and_params(
         &self,
         in_msg: Option<&Cell>,
@@ -117,7 +118,7 @@ pub trait TransactionExecutor {
         let old_hash = *shard_account.account.inner().repr_hash();
         let mut account = shard_account.account.load()?;
 
-        let mut transaction = self.execute_with_params(
+        let (mut transaction, gas_used) = self.execute_with_params(
             in_msg,
             &mut account,
             // no matter if previous transaction was successful or any of its phases failed,
@@ -150,6 +151,7 @@ pub trait TransactionExecutor {
         let output = ExecutorOutput {
             account_last_trans_lt: transaction.account_lt(),
             out_msgs: transaction.out_msgs,
+            gas_used,
             transaction: lazy_tx,
         };
         Ok((transaction.total_fees, output))
