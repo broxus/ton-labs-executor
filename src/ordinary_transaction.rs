@@ -19,6 +19,7 @@ use std::time::Instant;
 use anyhow::Context;
 
 use everscale_types::cell::{Cell, CellSliceRange};
+use everscale_types::dict::{build_dict_from_sorted_iter, Dict};
 use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, IntAddr, Lazy, MsgInfo, OptionalAccount, OwnedMessage, Transaction, TxInfo};
 use everscale_types::num::{Tokens, Uint15};
 use everscale_types::prelude::{CellFamily, Load};
@@ -378,9 +379,9 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         account.0.as_mut().map(|a| a.balance = acc_balance);
         tracing::debug!(target: "executor", "add messages");
         tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
-        for (msg_index, msg) in out_msgs.into_iter().enumerate() {
-            tr.out_msgs.set(Uint15::new(msg_index as u16), msg)?;
-        }
+        tr.out_msgs = Dict::from_raw(build_dict_from_sorted_iter(
+            (0..).map(Uint15::new).zip(out_msgs), 15, &mut Cell::empty_context()
+        )?);
         account.0.as_mut().map(|a| a.last_trans_lt = tr.account_lt());
         let gas_used = match &description.compute_phase {
             ComputePhase::Skipped(_) => 0,
