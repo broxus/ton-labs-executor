@@ -763,7 +763,7 @@ impl Common {
                 .filter(|r| !(r.is_data_empty() && r.is_refs_empty()))
                 .map(|r| r.apply(&msg.body.0)).transpose()? {
                 let mut body_copy = body.clone();
-                body_copy.shrink(Some(min(256, body.remaining_bits())), Some(0))?;
+                body_copy.only_first(min(256, body.size_bits()), 0)?;
                 bounce_msg_body.store_slice_data(body_copy)?;
                 if config.global_version().capabilities.contains(GlobalCapability::CapFullBodyInBounced) {
                     bounce_msg_body.store_reference(CellBuilder::build_from(&body)?)?;
@@ -779,7 +779,7 @@ impl Common {
         let mut bounce_msg = OwnedMessage {
             info: MsgInfo::Int(header),
             init: bounce_state_init,
-            body: if bounce_msg_body.bit_len() == 0 && bounce_msg_body.reference_count() == 0 {
+            body: if bounce_msg_body.size().is_zero() {
                 (Cell::empty_cell(), CellSliceRange::empty())
             } else {
                 let cell = bounce_msg_body.build()?;

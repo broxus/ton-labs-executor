@@ -23,7 +23,7 @@ pub fn storage_stats<S: Store>(
         // root hash cannot appear somewhere in the tree as circular cell dependency is impossible
         storage.cell_count += 1;
     } else {
-        storage.bit_count -= builder.bit_len() as u64;
+        storage.bit_count -= builder.size_bits() as u64;
     }
     Ok(storage)
 }
