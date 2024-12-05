@@ -85,10 +85,23 @@ impl Default for ExecuteParams {
 
 #[derive(Clone, Debug)]
 pub struct ExecutorOutput {
-    pub out_msgs: Dict<Uint15, Cell>,
+    pub account: AccountMeta,
+    pub transaction: ExecutedTransaction,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountMeta {
+    pub balance: CurrencyCollection,
+    pub libraries: Dict<HashBytes, SimpleLib>,
+    pub exists: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecutedTransaction {
     pub transaction: Lazy<Transaction>,
+    pub out_msgs: Dict<Uint15, Cell>,
     pub gas_used: u64,
-    pub account_last_trans_lt: u64,
+    pub next_lt: u64,
 }
 
 // Canary so trait is object safe
@@ -148,11 +161,35 @@ pub trait TransactionExecutor {
         shard_account.account = new_account_root;
         shard_account.last_trans_lt = transaction.lt;
         shard_account.last_trans_hash = *lazy_tx.inner().repr_hash();
+
+        let account_meta = match account.0 {
+            Some(account) => {
+                let libraries = match account.state {
+                    AccountState::Active(state) => state.libraries,
+                    AccountState::Frozen(..) | AccountState::Uninit => Dict::new(),
+                };
+
+                AccountMeta {
+                    balance: account.balance,
+                    libraries,
+                    exists: true,
+                }
+            }
+            None => AccountMeta {
+                balance: CurrencyCollection::ZERO,
+                libraries: Dict::new(),
+                exists: false,
+            }
+        };
+
         let output = ExecutorOutput {
-            account_last_trans_lt: transaction.account_lt(),
-            out_msgs: transaction.out_msgs,
-            gas_used,
-            transaction: lazy_tx,
+            account: account_meta,
+            transaction: ExecutedTransaction {
+                transaction: lazy_tx,
+                next_lt: transaction.account_lt(),
+                out_msgs: transaction.out_msgs,
+                gas_used,
+            },
         };
         Ok((transaction.total_fees, output))
     }

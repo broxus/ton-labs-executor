@@ -12,7 +12,7 @@
 */
 
 mod transaction_executor;
-pub use transaction_executor::{ExecuteParams, ExecutorOutput, TransactionExecutor};
+pub use transaction_executor::{ExecuteParams, ExecutorOutput, TransactionExecutor, AccountMeta, ExecutedTransaction};
 
 mod ordinary_transaction;
 pub use ordinary_transaction::OrdinaryTransactionExecutor;
