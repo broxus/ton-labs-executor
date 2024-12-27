@@ -18,7 +18,7 @@ use everscale_types::error::Error;
 use everscale_types::models::{BlockchainConfig, GasLimitsPrices, GlobalCapabilities, GlobalCapability, GlobalVersion, MsgForwardPrices, StdAddr, StorageInfo, StoragePrices, WorkchainDescription, WorkchainFormat, WorkchainFormatBasic};
 use everscale_types::num::Tokens;
 use everscale_types::prelude::{CellBuilder, Dict, Store};
-use everscale_vm::types::Result;
+use anyhow::Result;
 
 use crate::ext::gas_limit_prices::GasLimitsPricesExt;
 

@@ -18,16 +18,13 @@ use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 use anyhow::Context;
 
-use everscale_types::cell::{Cell, CellSliceRange};
+use everscale_types::cell::Cell;
 use everscale_types::dict::{build_dict_from_sorted_iter, Dict};
 use everscale_types::models::{Account, AccountState, AccountStatus, AccountStatusChange, BouncePhase, ComputePhase, CurrencyCollection, GlobalCapability, IntAddr, Lazy, MsgInfo, OptionalAccount, OwnedMessage, Transaction, TxInfo};
 use everscale_types::num::{Tokens, Uint15};
 use everscale_types::prelude::{CellFamily, Load};
-use everscale_vm::{
-    boolean, int,
-    stack::{integer::IntegerData, Stack, StackItem},
-};
-use everscale_vm::{error, fail, OwnedCellSlice, types::Result};
+use tycho_vm::{tuple, SafeRc, Tuple};
+use anyhow::{anyhow, bail, Result};
 
 use crate::blockchain_config::{MAX_MSG_CELLS, PreloadedBlockchainConfig, VERSION_GLOBAL_REVERT_MESSAGES_WITH_ANYCAST_ADDRESSES};
 use crate::error::ExecutorError;
@@ -66,11 +63,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
+        unpacked_config: SafeRc<Tuple>,
     ) -> Result<(Transaction, u64)> {
         #[cfg(feature = "timings")]
             let mut now = Instant::now();
 
-        let in_msg = in_msg.ok_or_else(|| error!("Ordinary transaction must have input message"))?;
+        let in_msg = in_msg.ok_or_else(|| anyhow!("Ordinary transaction must have input message"))?;
         let in_msg = InputMessage {
             cell: in_msg,
             data: &OwnedMessage::load_from(
@@ -96,7 +94,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 is_ext_msg = true;
                 msg_balance = CurrencyCollection::default();
             },
-            MsgInfo::ExtOut(_) => fail!(ExecutorError::InvalidExtMessage)
+            MsgInfo::ExtOut(_) => bail!(ExecutorError::InvalidExtMessage)
         };
         tracing::debug!(
             target: "executor",
@@ -104,11 +102,11 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             in_msg.cell.repr_hash()
         );
         if !account.0.as_ref().map_or(true, |a| a.address == *acc_addr) {
-            fail!(ExecutorError::InvalidExtMessage);
+            bail!(ExecutorError::InvalidExtMessage);
         }
         let acc_addr = match acc_addr {
             IntAddr::Std(std) => std,
-            _ => fail!(ExecutorError::InvalidExtMessage)
+            _ => bail!(ExecutorError::InvalidExtMessage)
         };
         match &account.0 {
             Some(_) => tracing::debug!(target: "executor", "Account = {}", acc_addr),
@@ -142,13 +140,13 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             let in_fwd_fee = config.calc_fwd_fee(acc_addr.is_masterchain(), &storage_stats(&in_msg.data, false, MAX_MSG_CELLS)?)?;
             tracing::debug!(target: "executor", "import message fee: {}, acc_balance: {}", in_fwd_fee, acc_balance.tokens);
             acc_balance.tokens = acc_balance.tokens.checked_sub(in_fwd_fee).ok_or(ExecutorError::NoFundsToImportMsg)?;
-            tr.total_fees.tokens = tr.total_fees.tokens.checked_add(in_fwd_fee).ok_or_else(|| error!("integer overflow"))?;
+            tr.total_fees.tokens = tr.total_fees.tokens.checked_add(in_fwd_fee).ok_or_else(|| anyhow!("integer overflow"))?;
         }
 
         if description.credit_first && !is_ext_msg {
             description.credit_phase = match Common::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
                 Ok(credit_ph) => Some(credit_ph),
-                Err(e) => fail!(
+                Err(e) => bail!(
                     ExecutorError::TrExecutorError(
                         format!("cannot create credit phase of a new transaction for smart contract for reason {}", e)
                     )
@@ -165,7 +163,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             time.now(),
             acc_addr.is_masterchain(),
             is_special
-        ).map_err(|e| error!(
+        ).map_err(|e| anyhow!(
             ExecutorError::TrExecutorError(
                 format!("cannot create storage phase of a new transaction for smart contract for reason {}", e)
             )
@@ -191,7 +189,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         if !description.credit_first && !is_ext_msg {
             description.credit_phase = match Common::credit_phase(account, &mut tr.total_fees.tokens, &mut msg_balance, &mut acc_balance) {
                 Ok(credit_ph) => Some(credit_ph),
-                Err(e) => fail!(
+                Err(e) => bail!(
                     ExecutorError::TrExecutorError(
                         format!("cannot create credit phase of a new transaction for smart contract for reason {}", e)
                     )
@@ -206,26 +204,19 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             now = Instant::now();
         }
 
-        let mut stack = Stack::new();
+        let stack = tuple![
+            int acc_balance.tokens.into_inner(),
+            int msg_balance.tokens.into_inner(),
+            cell in_msg.cell.clone(),
+            slice in_msg.data.body.clone(),
+            int if is_ext_msg { -1 } else { 0 },
+        ];
 
-        stack
-            .push(int!(acc_balance.tokens.into_inner()))
-            .push(int!(msg_balance.tokens.into_inner()))
-            .push(StackItem::Cell(in_msg.cell.clone()))
-            // .push(StackItem::Slice(OwnedCellSlice::try_from(in_msg.data.body.clone())?))
-            // TODO: uncomment the line above and delete the `push()` below -
-            //  it's only to reproduce logs from ton_types, though not truly correct
-            .push(StackItem::Slice(OwnedCellSlice::try_from(
-                if in_msg.data.body.1.is_data_empty() && in_msg.data.body.1.is_refs_empty() {
-                    (Cell::empty_cell(), CellSliceRange::empty())
-                } else {
-                    in_msg.data.body.clone()
-                })?))
-            .push(boolean!(is_ext_msg));
         tracing::debug!(target: "executor", "compute_phase");
         let (actions, new_data);
         (description.compute_phase, actions, new_data) = Common::compute_phase(
             config,
+            unpacked_config,
             true,
             Some(&in_msg),
             account,
@@ -240,8 +231,8 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         ).map_err(|e| {
             tracing::error!(target: "executor", "compute_phase error: {}", e);
             match e.downcast_ref::<ExecutorError>() {
-                Some(ExecutorError::NoAcceptError(_, _)) => e,
-                _ => error!(ExecutorError::TrExecutorError(e.to_string()))
+                Some(ExecutorError::NoAcceptError(_)) => e,
+                _ => anyhow!(ExecutorError::TrExecutorError(e.to_string()))
             }
         })?;
         // let mut copyleft = None;
@@ -251,7 +242,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             ComputePhase::Executed(phase) => {
                 compute_phase_gas_fees = phase.gas_fees;
                 tr.total_fees.tokens = tr.total_fees.tokens.checked_add(compute_phase_gas_fees)
-                    .ok_or_else(|| error!("integer overflow"))?;
+                    .ok_or_else(|| anyhow!("integer overflow"))?;
                 if phase.success {
                     tracing::debug!(target: "executor", "compute_phase: success");
                     tracing::debug!(target: "executor", "action_phase: lt={}", time.tx_lt());
@@ -273,12 +264,12 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                         Ok(ActionPhaseResult{phase, messages, copyleft_reward}) => {
                             if let Some(copyleft_reward) = &copyleft_reward {
                                 tr.total_fees.tokens = tr.total_fees.tokens.checked_sub(copyleft_reward.reward)
-                                    .ok_or_else(|| error!("integer underflow"))?;
+                                    .ok_or_else(|| anyhow!("integer underflow"))?;
                             }
                             // copyleft = copyleft_reward;
                             (Some(phase),  messages)
                         }
-                        Err(e) => fail!(
+                        Err(e) => bail!(
                             ExecutorError::TrExecutorError(
                                 format!("cannot create action phase of a new transaction for smart contract for reason {}", e)
                             )
@@ -293,7 +284,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                 compute_phase_gas_fees = Tokens::ZERO;
                 tracing::debug!(target: "executor", "compute_phase: skipped reason {:?}", skipped.reason);
                 if is_ext_msg {
-                    fail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
+                    bail!(ExecutorError::ExtMsgComputeSkipped(skipped.reason.clone()))
                 }
                 (None, vec![])
             }
@@ -354,7 +345,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                         Some(bounce_ph)
                     }
                     Ok((bounce_ph, None)) => Some(bounce_ph),
-                    Err(e) => fail!(
+                    Err(e) => bail!(
                         ExecutorError::TrExecutorError(
                             format!("cannot create bounce phase of a new transaction for smart contract for reason {}", e)
                         )

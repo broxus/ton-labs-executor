@@ -2,9 +2,8 @@ use std::cmp::min;
 
 use everscale_types::models::GasLimitsPrices;
 use everscale_types::num::{Tokens, VarUint24, VarUint56};
-use everscale_vm::executor::gas::gas_state::Gas;
-use everscale_vm::fail;
-use everscale_vm::types::Result;
+use tycho_vm::GasParams;
+use anyhow::{bail, Result};
 
 pub trait GasLimitsPricesExt {
     fn calc_gas_fee(&self, gas_used: u64) -> Tokens;
@@ -15,7 +14,7 @@ pub trait GasLimitsPricesExt {
         is_external: bool,
         is_special: bool,
         is_ordinary: bool,
-    ) -> Result<Gas>;
+    ) -> Result<GasParams>;
 }
 
 impl GasLimitsPricesExt for GasLimitsPrices {
@@ -43,15 +42,15 @@ impl GasLimitsPricesExt for GasLimitsPrices {
         is_external: bool,
         is_special: bool,
         is_ordinary: bool,
-    ) -> Result<Gas> {
+    ) -> Result<GasParams> {
         if self.gas_limit > VarUint56::MAX.into_inner() {
-            fail!("config error: gas_limit exceeds 56 bits and cannot be stored in tx.info.compute_phase")
+            bail!("config error: gas_limit exceeds 56 bits and cannot be stored in tx.info.compute_phase")
         }
         if self.special_gas_limit > VarUint56::MAX.into_inner() {
-            fail!("config error: special_gas_limit exceeds 56 bits and cannot be stored in tx.info.compute_phase")
+            bail!("config error: special_gas_limit exceeds 56 bits and cannot be stored in tx.info.compute_phase")
         }
         if self.gas_credit > VarUint24::MAX.into_inner() as u64 {
-            fail!("config error: gas_credit exceeds 24 bits and cannot be stored in tx.info.compute_phase")
+            bail!("config error: gas_credit exceeds 24 bits and cannot be stored in tx.info.compute_phase")
         }
         let gas_max = if is_special {
             self.special_gas_limit
@@ -70,7 +69,7 @@ impl GasLimitsPricesExt for GasLimitsPrices {
         let gas_price_nano = self.gas_price >> 16;
         if gas_price_nano << 16 != self.gas_price || gas_price_nano == 0 {
             // forbid division by zero and imprecise computation
-            fail!("config error: gas_price must have at least 16 trailing zero bits")
+            bail!("config error: gas_price must have at least 16 trailing zero bits")
         }
         tracing::debug!(
             target: "executor",
@@ -78,7 +77,11 @@ impl GasLimitsPricesExt for GasLimitsPrices {
             gas_max, gas_limit, gas_credit, gas_price_nano
         );
 
-        Ok(Gas::new(gas_limit, gas_credit, gas_max, gas_price_nano))
+        Ok(GasParams {
+            max: gas_max,
+            limit: gas_limit,
+            credit: gas_credit as u64,
+        })
     }
 }
 /// Calculate gas by token balance

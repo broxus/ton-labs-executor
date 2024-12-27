@@ -1,7 +1,7 @@
 use everscale_types::cell::CellBuilder;
 use everscale_types::models::{Account, AccountState, CurrencyCollection, IntAddr, StdAddr, StorageInfo, StorageUsed};
 use everscale_types::num::VarUint56;
-use everscale_vm::types::Result;
+use anyhow::Result;
 
 use crate::blockchain_config::MAX_ACCOUNT_CELLS;
 use crate::utils::storage_stats;

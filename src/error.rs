@@ -12,19 +12,18 @@
 */
 
 use everscale_types::models::ComputePhaseSkipReason;
-use everscale_vm::types::ExceptionCode;
-use everscale_vm::stack::StackItem;
+use tycho_vm::VmException;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
-pub enum ExecutorError {   
+pub enum ExecutorError {
     #[error("Invalid external message")]
     InvalidExtMessage,
     #[error("Transaction executor internal error: {0}")]
     TrExecutorError(String),
     #[error("VM Exception, code: {0}")]
-    TvmExceptionCode(ExceptionCode),
+    TvmExceptionCode(VmException),
     #[error("Contract did not accept message, exit code: {0}")]
-    NoAcceptError(i32, Option<StackItem>),
+    NoAcceptError(i32),
     #[error("Cannot pay for importing this external message")]
     NoFundsToImportMsg,
     #[error("Compute phase skipped while processing external inbound message with reason {0:?}")]

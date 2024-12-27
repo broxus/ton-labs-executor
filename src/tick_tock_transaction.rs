@@ -16,11 +16,9 @@ use everscale_types::dict::{build_dict_from_sorted_iter, Dict};
 use everscale_types::models::{Account, AccountState, ComputePhase, ComputePhaseSkipReason, CurrencyCollection, IntAddr, Lazy, OptionalAccount, SkippedComputePhase, StateInit, TickTock, TickTockTxInfo, Transaction, TxInfo};
 use everscale_types::num::{Tokens, Uint15};
 use everscale_types::prelude::CellFamily;
-use everscale_vm::{
-    boolean, int,
-    stack::{integer::IntegerData, Stack, StackItem},
-};
-use everscale_vm::{error, fail, types::Result};
+use tycho_vm::{tuple, SafeRc, Tuple};
+use anyhow::{anyhow, bail, Result};
+use num_bigint::{BigInt, Sign};
 
 use crate::{error::ExecutorError, ExecuteParams, TransactionExecutor};
 use crate::blockchain_config::PreloadedBlockchainConfig;
@@ -50,26 +48,27 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         min_lt: u64,
         params: &ExecuteParams,
         config: &PreloadedBlockchainConfig,
+        unpacked_config: SafeRc<Tuple>,
     ) -> Result<(Transaction, u64)> {
         if in_msg.is_some() {
-            fail!("Tick Tock transaction must not have input message")
+            bail!("Tick Tock transaction must not have input message")
         }
         let (acc_addr, mut acc_balance) = match &account.0 {
             Some(account) => {
                 let IntAddr::Std(acc_addr) = &account.address else {
-                    fail!("Tick Tock contract should have Standard address")
+                    bail!("Tick Tock contract should have Standard address")
                 };
                 match account.state {
                     AccountState::Active(StateInit { special: Some(tt), .. }) =>
                         if tt.tock != (self.tt == TickTock::Tock) && tt.tick != (self.tt == TickTock::Tick) {
-                            fail!("wrong type of account's tick tock flag")
+                            bail!("wrong type of account's tick tock flag")
                         }
-                    _ => fail!("Account {} is not special account for tick tock", acc_addr)
+                    _ => bail!("Account {} is not special account for tick tock", acc_addr)
                 }
                 tracing::debug!(target: "executor", "tick tock transaction account {}", acc_addr);
                 (acc_addr.clone(), account.balance.clone())
             },
-            None => fail!("Tick Tock transaction requires deployed account")
+            None => bail!("Tick Tock transaction requires deployed account")
         };
 
         let is_special = true;
@@ -84,7 +83,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
             time.now(),
             acc_addr.is_masterchain(),
             is_special,
-        ).map_err(|e| error!(
+        ).map_err(|e| anyhow!(
             ExecutorError::TrExecutorError(
                 format!(
                     "cannot create storage phase of a new transaction for \
@@ -92,7 +91,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                 )
             )
         ))? else {
-            fail!("Tick Tock transaction storage phase cannot be skipped")
+            bail!("Tick Tock transaction storage phase cannot be skipped")
         };
         let mut description = TickTockTxInfo {
             kind: self.tt.clone(),
@@ -106,16 +105,18 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         let old_account = account.clone();
         let action_phase_acc_balance = acc_balance.clone();
 
-        let mut stack = Stack::new();
-        stack
-            .push(int!(acc_balance.tokens.into_inner()))
-            .push(StackItem::integer(IntegerData::from_unsigned_bytes_be(&acc_addr.address.0)))
-            .push(boolean!(self.tt == TickTock::Tock))
-            .push(int!(-2));
+        let stack = tuple![
+            int acc_balance.tokens.into_inner(),
+            int BigInt::from_bytes_be(Sign::Plus, acc_addr.address.as_slice()),
+            int if self.tt == TickTock::Tock { -1 } else { 0 },
+            int -2,
+        ];
+
         tracing::debug!(target: "executor", "compute_phase {}", time.tx_lt());
         let (actions, new_data);
         (description.compute_phase, actions, new_data) = Common::compute_phase(
             config,
+            unpacked_config,
             false,
             None,
             account,
@@ -130,15 +131,15 @@ impl TransactionExecutor for TickTockTransactionExecutor {
         ).map_err(|e| {
             tracing::error!(target: "executor", "compute_phase error: {}", e);
             match e.downcast_ref::<ExecutorError>() {
-                Some(ExecutorError::NoAcceptError(_, _)) => e,
-                _ => error!(ExecutorError::TrExecutorError(e.to_string()))
+                Some(ExecutorError::NoAcceptError(_)) => e,
+                _ => anyhow!(ExecutorError::TrExecutorError(e.to_string()))
             }
         })?;
         let out_msgs;
         (description.action_phase, out_msgs) = match description.compute_phase {
             ComputePhase::Executed(ref phase) => {
                 tr.total_fees.tokens = tr.total_fees.tokens
-                    .checked_add(phase.gas_fees).ok_or_else(|| error!("integer overflow"))?;
+                    .checked_add(phase.gas_fees).ok_or_else(|| anyhow!("integer overflow"))?;
                 if phase.success {
                     tracing::debug!(target: "executor", "compute_phase: TrComputePhase::Vm success");
                     tracing::debug!(target: "executor", "action_phase {}", time.tx_lt());
@@ -159,7 +160,7 @@ impl TransactionExecutor for TickTockTransactionExecutor {
                             // ignore copyleft reward because account is special
                             (Some(phase), messages)
                         }
-                        Err(e) => fail!(
+                        Err(e) => bail!(
                             ExecutorError::TrExecutorError(
                                 format!(
                                     "cannot create action phase of a new transaction \
