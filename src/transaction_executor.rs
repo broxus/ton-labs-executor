@@ -434,9 +434,7 @@ impl Common {
             .require_ton_v4()
             .with_code(code.clone())
             .with_message_balance(msg_balance.clone())
-            .with_storage_fees(storage_fee)
-            .require_ton_v6()
-            .with_unpacked_config(unpacked_config);
+            .with_storage_fees(storage_fee);
 
         let mut vm = VmState::builder()
             .with_smc_info(smc_info)
