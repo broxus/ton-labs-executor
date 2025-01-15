@@ -4,7 +4,7 @@ name = "ton_executor"
 version = "2.0.0"
 
 [dependencies]
-everscale-vm = { git = "https://github.com/broxus/ton-labs-vm.git", package = "ton_vm", branch = "new_cells" }
+everscale-vm = { git = "https://github.com/broxus/ton-labs-vm.git", package = "ton_vm", branch = "newer_cells" }
 everscale-types = { version = "0.1", features = ["stats"] }
 
 # External
@@ -12,3 +12,6 @@ ahash = "0.8"
 anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"
+
+[patch.crates-io]
+everscale-types = { git = "https://github.com/broxus/everscale-types.git" }

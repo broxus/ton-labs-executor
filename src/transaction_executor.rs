@@ -1546,20 +1546,20 @@ fn change_library_action_handler(acc: &mut OptionalAccount, mode: ChangeLibraryM
     let Some(Account { state: AccountState::Active(ref mut state), .. }) = &mut acc.0 else {
         return Err(ActionError::BadAccountState);
     };
-    let result = match (mode, lib_ref) {
-        (ChangeLibraryMode::Remove, lib_ref) => {
+    let result = match lib_ref {
+        lib_ref if mode.contains(ChangeLibraryMode::REMOVE) => {
             let hash = match lib_ref {
                 LibRef::Hash(hash) => hash,
                 LibRef::Cell(root) => *root.repr_hash(),
             };
             state.libraries.remove(hash).is_ok()
         }
-        (mode, LibRef::Cell(root)) => {
-            let public = mode == ChangeLibraryMode::AddPublic;
+        LibRef::Cell(root) => {
+            let public = mode.contains(ChangeLibraryMode::ADD_PUBLIC);
             state.libraries.add(root.repr_hash().0, SimpleLib { public, root }).is_ok()
         }
-        (mode, LibRef::Hash(hash)) => {
-            let public = mode == ChangeLibraryMode::AddPublic;
+        LibRef::Hash(hash) => {
+            let public = mode.contains(ChangeLibraryMode::ADD_PUBLIC);
             match state.libraries.get(&hash) {
                 Ok(Some(lib)) if lib.public == public => true,
                 Ok(Some(lib)) =>
