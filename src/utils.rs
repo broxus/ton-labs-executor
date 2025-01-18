@@ -14,7 +14,7 @@ pub fn storage_stats<S: Store>(
     cell_limit: usize,
 ) -> StdResult<CellTreeStats, types::Error> {
     let mut builder = CellBuilder::new();
-    s.store_into(&mut builder, &mut Cell::empty_context())?;
+    s.store_into(&mut builder, Cell::empty_context())?;
     // storage stats for slice do not count root cell, but do count its bits
     let mut storage = builder.as_full_slice()
         .compute_unique_stats(cell_limit)

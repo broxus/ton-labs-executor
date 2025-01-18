@@ -371,7 +371,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
         tracing::debug!(target: "executor", "add messages");
         tr.out_msg_count = Uint15::new(out_msgs.len() as u16);
         tr.out_msgs = Dict::from_raw(build_dict_from_sorted_iter(
-            (0..).map(Uint15::new).zip(out_msgs), 15, &mut Cell::empty_context()
+            (0..).map(Uint15::new).zip(out_msgs), 15, Cell::empty_context()
         )?);
         account.0.as_mut().map(|a| a.last_trans_lt = tr.account_lt());
         let gas_used = match &description.compute_phase {

@@ -438,10 +438,12 @@ impl Common {
             .require_ton_v6()
             .with_unpacked_config(unpacked_config);
 
+        let libraries = (acc_libs, &params.state_libs);
         let mut vm = VmState::builder()
             .with_smc_info(smc_info)
             .with_code(code.clone())
             .with_data(data)
+            .with_libraries(&libraries)
             .with_init_selector(false)
             .with_stack(stack)
             .with_gas(gas)
@@ -456,9 +458,9 @@ impl Common {
         tracing::debug!(target: "executor", "VM terminated with exit code {}", vm_phase.exit_code);
 
         //for external messages gas will not be exacted if VM throws the exception and gas_credit != 0
-        let used = vm.gas.gas_consumed();
+        let used = vm.gas.consumed();
         vm_phase.gas_used = used.try_into()?;
-        if vm.gas.gas_credit != 0 {
+        if vm.gas.credit() != 0 {
             if is_external {
                 bail!(ExecutorError::NoAcceptError(vm_phase.exit_code))
             }
@@ -470,7 +472,7 @@ impl Common {
         tracing::debug!(
             target: "executor",
             "gas after: gl: {}, gc: {}, gu: {}, fees: {}",
-            vm.gas.gas_limit, vm.gas.gas_credit, used, vm_phase.gas_fees
+            vm.gas.limit(), vm.gas.credit(), used, vm_phase.gas_fees
         );
 
         //set mode
