@@ -236,6 +236,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
             unix_time: params.block_unixtime,
             seq_no: params.seq_no,
             balance: acc_balance.clone(),
+            message_balance: msg_balance.clone(),
             config_params,
             ..Default::default()
         };
