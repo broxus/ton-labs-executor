@@ -81,6 +81,7 @@ impl GasLimitsPricesExt for GasLimitsPrices {
             max: gas_max,
             limit: gas_limit,
             credit: gas_credit as u64,
+            price: self.gas_price,
         })
     }
 }
