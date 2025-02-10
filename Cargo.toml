@@ -15,5 +15,5 @@ tracing = "0.1"
 num-bigint = "0.4"
 
 [patch.crates-io]
-everscale-types = { git = "https://github.com/broxus/everscale-types.git", rev = "69c344eac4e1f95d66b045ae90db904ad8afdfaf" }
-everscale-types-proc = { git = "https://github.com/broxus/everscale-types.git", rev = "69c344eac4e1f95d66b045ae90db904ad8afdfaf" }
+everscale-types = { git = "https://github.com/broxus/everscale-types.git", rev = "adada6e6539abd798dbbc5a7fc1d17cc31fa7eff" }
+everscale-types-proc = { git = "https://github.com/broxus/everscale-types.git", rev = "adada6e6539abd798dbbc5a7fc1d17cc31fa7eff" }
