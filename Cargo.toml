@@ -6,7 +6,7 @@ version = "1.15.54"
 [dependencies]
 ton_block = { git = "https://github.com/broxus/ton-labs-block.git" }
 ton_types = { git = "https://github.com/broxus/ton-labs-types.git" }
-ton_vm = { git = "https://github.com/broxus/ton-labs-vm.git" }
+ton_vm = { git = "https://github.com/broxus/ton-labs-vm.git", branch = "feature/missing-library" }
 
 # External
 anyhow = "1.0.42"
