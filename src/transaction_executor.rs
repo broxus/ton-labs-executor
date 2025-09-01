@@ -411,7 +411,7 @@ pub trait TransactionExecutor {
             smc_info.set_init_code_hash(*init_code_hash);
         }
         let mut vm = VMSetup::with_context(
-            SliceData::load_cell(code)?,
+            code,
             VMSetupContext {
                 capabilities: self.config().capabilites(),
                 block_version: params.block_version,
@@ -424,7 +424,7 @@ pub trait TransactionExecutor {
             .set_libraries(libs)
             .set_gas(gas)
             .set_debug(params.debug)
-            .create();
+            .create()?;
 
         if let Some(modifiers) = params.behavior_modifiers.clone() {
             vm.modify_behavior(modifiers);

@@ -29,7 +29,7 @@ pub struct VMSetupContext {
 /// stack and code of VM engine. Returns initialized instance of TVM.
 pub struct VMSetup {
     vm: Engine,
-    code: SliceData,
+    code: Cell,
     ctrls: SaveList,
     stack: Option<Stack>,
     gas: Option<Gas>,
@@ -41,7 +41,7 @@ impl VMSetup {
 
     /// Creates new instance of VMSetup with contract code.
     /// Initializes some registers of TVM with predefined values.
-    pub fn with_context(code: SliceData, ctx: VMSetupContext) -> Self {
+    pub fn with_context(code: Cell, ctx: VMSetupContext) -> Self {
         VMSetup {
             vm: Engine::with_capabilities(ctx.capabilities),
             code,
@@ -125,7 +125,7 @@ impl VMSetup {
     }
 
     /// Creates new instance of TVM with defined stack, registers and code.
-    pub fn create(self) -> Engine {
+    pub fn create(self) -> Result<Engine> {
         if cfg!(debug_assertions) {
             // account balance is duplicated in stack and in c7 - so check
             let balance_in_smc = self
@@ -159,6 +159,6 @@ impl VMSetup {
         );
         vm.set_block_version(self.ctx.block_version);
         vm.set_signature_id(self.ctx.signature_id);
-        vm
+        Ok(vm)
     }
 }
