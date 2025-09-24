@@ -1244,13 +1244,19 @@ fn outmsg_action_handler(
         if (mode & SENDMSG_ALL_BALANCE) != 0 {
             //send all remaining account balance
             result_value = acc_balance.clone();
-            int_header.value = acc_balance.clone();
+
+            // NOTE: Backported strict extra currency behavior
+            result_value.other = ExtraCurrencyCollection::new();
+
+            int_header.value = result_value.clone();
 
             mode &= !SENDMSG_PAY_FEE_SEPARATELY;
         }
         if (mode & SENDMSG_REMAINING_MSG_BALANCE) != 0 {
             //send all remainig balance of inbound message
-            result_value.add(msg_balance).ok();
+            // NOTE: Backported strict extra currency behavior
+            result_value.grams.add(&msg_balance.grams).ok();
+
             if (mode & SENDMSG_PAY_FEE_SEPARATELY) == 0 {
                 if &result_value.grams < compute_phase_fees {
                     return Err(skip.map(|_| RESULT_CODE_NOT_ENOUGH_GRAMS).unwrap_or_default())
@@ -1345,7 +1351,8 @@ fn outmsg_action_handler(
     }
 
     if (mode & (SENDMSG_ALL_BALANCE | SENDMSG_REMAINING_MSG_BALANCE)) != 0 {
-        *msg_balance = CurrencyCollection::default();
+        // NOTE: Backported strict extra currency behavior
+        msg_balance.grams = Grams::default();
     }
 
     log::debug!(target: "executor", "Message details:\n\tFlag: {}\n\tValue: {}\n\tSource: {}\n\tDestination: {}\n\tBody: {}\n\tStateInit: {}",
@@ -1374,11 +1381,20 @@ fn reserve_action_handler(
     }
     log::debug!(target: "executor", "Reserve with mode = {} value = {}", mode, balance_to_string(val));
 
+    // NOTE: Backported strict extra currency behavior
+    if !val.other.is_empty() {
+        return Err(RESULT_CODE_NOT_ENOUGH_EXTRA);
+    }
+
     let mut reserved;
     if mode & RESERVE_PLUS_ORIG != 0 {
         // Append all currencies
         if mode & RESERVE_REVERSE != 0 {
             reserved = original_acc_balance.clone();
+
+            // NOTE: Backported strict extra currency behavior
+            reserved.other = ExtraCurrencyCollection::new();
+
             let result = reserved.sub(val);
             match result {
                 Err(_) => return Err(RESULT_CODE_INVALID_BALANCE),
@@ -1387,7 +1403,9 @@ fn reserve_action_handler(
             }
         } else {
             reserved = val.clone();
-            reserved.add(original_acc_balance).or(Err(RESULT_CODE_INVALID_BALANCE))?;
+
+            // NOTE: Backported strict extra currency behavior
+            reserved.grams.add(&original_acc_balance.grams).or(Err(RESULT_CODE_INVALID_BALANCE))?;
         }
     } else {
         if mode & RESERVE_REVERSE != 0 { // flag 8 without flag 4 unacceptable
@@ -1414,7 +1432,9 @@ fn reserve_action_handler(
 
     if mode & RESERVE_ALL_BUT != 0 {
         // swap all currencies
-        std::mem::swap(&mut reserved, acc_remaining_balance);
+
+        // NOTE: Backported strict extra currency behavior
+        std::mem::swap(&mut reserved.grams, &mut acc_remaining_balance.grams);
     }
 
     Ok(reserved)

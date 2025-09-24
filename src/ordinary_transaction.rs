@@ -338,6 +338,15 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
                     "action_phase: present: success={}, err_code={}", phase.success, phase.result_code
                 );
                 if AccStatusChange::Deleted == phase.status_change {
+                    // NOTE: Backported strict extra currency behavior
+                    if let Account::Account(acc) = account {
+                        if acc.storage.balance.is_zero()? {
+                            *account = Account::default();
+                        } else {
+                            acc.storage.state = ton_block::AccountState::AccountUninit;
+                        }
+                    }
+
                     *account = Account::default();
                     description.destroyed = true;
                 }
