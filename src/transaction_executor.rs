@@ -424,7 +424,7 @@ pub trait TransactionExecutor {
             .set_libraries(libs)
             .set_gas(gas)
             .set_debug(params.debug)
-            .create()?;
+            .create();
 
         if let Some(modifiers) = params.behavior_modifiers.clone() {
             vm.modify_behavior(modifiers);

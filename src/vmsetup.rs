@@ -125,7 +125,7 @@ impl VMSetup {
     }
 
     /// Creates new instance of TVM with defined stack, registers and code.
-    pub fn create(self) -> Result<Engine> {
+    pub fn create(self) -> Engine {
         if cfg!(debug_assertions) {
             // account balance is duplicated in stack and in c7 - so check
             let balance_in_smc = self
@@ -159,6 +159,6 @@ impl VMSetup {
         );
         vm.set_block_version(self.ctx.block_version);
         vm.set_signature_id(self.ctx.signature_id);
-        Ok(vm)
+        vm
     }
 }
