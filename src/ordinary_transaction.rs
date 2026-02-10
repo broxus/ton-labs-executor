@@ -42,6 +42,7 @@ use ton_vm::executor::BehaviorModifiers;
 pub struct OrdinaryTransactionExecutor {
     config: BlockchainConfig,
     disable_signature_check: bool,
+    enable_signature_domains: bool,
 
     #[cfg(feature="timings")]
     timings: [AtomicU64; 3], // 0 - preparation, 1 - compute, 2 - after compute
@@ -49,11 +50,15 @@ pub struct OrdinaryTransactionExecutor {
 
 impl OrdinaryTransactionExecutor {
     pub fn new(config: BlockchainConfig) -> Self {
+        let signature_id_enabled = config.has_capability(GlobalCapabilities::CapSignatureWithId);
+        let signature_domain_enabled = config.has_capability(GlobalCapabilities::CapSignatureDomain);
+        let enable_signature_domains = signature_domain_enabled && signature_id_enabled;
         Self {
             config,
             disable_signature_check: false,
             #[cfg(feature="timings")]
             timings: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
+            enable_signature_domains
         }
     }
 
@@ -71,6 +76,7 @@ impl TransactionExecutor for OrdinaryTransactionExecutor {
     fn behavior_modifiers(&self) -> BehaviorModifiers {
         BehaviorModifiers {
             chksig_always_succeed: self.disable_signature_check,
+            enable_signature_domains: self.enable_signature_domains
         }
     }
 
