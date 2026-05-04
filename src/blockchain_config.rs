@@ -156,9 +156,10 @@ impl AccStoragePrices {
 
     pub fn with_config(config: &ConfigParam18) -> Result<Self> {
         let mut prices = vec![];
-        for i in 0..config.len()? {
-            prices.push(config.get(i as u32)?);
-        }
+        config.map.iterate_with_keys(|_key: u32, val: StoragePrices| {
+            prices.push(val);
+            Ok(true)
+        })?;
 
         Ok(AccStoragePrices { prices })
     }
